@@ -105,3 +105,44 @@ func TestGoDiscoveryQueriesAndSeenStore(t *testing.T) {
 	}
 }
 
+func TestGoArticleInnerHeaderAndDetailExtraction(t *testing.T) {
+	nestedHTML := `
+	<html><body>
+	  <main>
+	    <article data-info="a > b">
+	      <header><h2><a href="/jobs/atlassian-intern-2028" title="Click > Apply">Atlassian SWE Intern 2028</a></h2></header>
+	      <footer><p>Bengaluru • Batch 2028 • ₹1,10,000/month</p></footer>
+	    </article>
+	  </main>
+	  <footer><nav><a href="/privacy">Privacy</a></nav></footer>
+	</body></html>`
+
+	cands := ExtractDOMCandidates(nestedHTML, "https://careersat.tech/jobs", "careersat")
+	byPath := map[string]DOMCandidate{}
+	for _, c := range cands {
+		byPath[c.URLPath] = c
+	}
+	if byPath["/jobs/atlassian-intern-2028"].Region != "article" {
+		t.Fatalf("expected article region for link inside <article><header>, got %s", byPath["/jobs/atlassian-intern-2028"].Region)
+	}
+	if byPath["/privacy"].Region != "footer" {
+		t.Fatalf("expected footer region for <footer ><nav>, got %s", byPath["/privacy"].Region)
+	}
+
+	detailHTML := `
+	<html><head><script type="application/ld+json">
+	{"@type":"JobPosting","title":"Atlassian SWE Intern 2028","hiringOrganization":{"name":"Atlassian Hiring"},"description":"<p>Build cloud backend in Go and Python.</p><p>Join our WhatsApp group!</p>"}
+	</script></head><body><article><a href="https://atlassian.com/careers/1">Apply Now</a></article></body></html>`
+	rec := ExtractJobRecordFromHTML(detailHTML, "https://careersat.tech/jobs/atlassian-intern-2028", "careersat", 0.96)
+	if rec.Company != "Atlassian" {
+		t.Fatalf("expected clean company Atlassian, got %s", rec.Company)
+	}
+	if strings.Contains(rec.JobDescription, "WhatsApp") {
+		t.Fatalf("expected WhatsApp promo stripped from description, got %s", rec.JobDescription)
+	}
+	if rec.ApplyURL != "https://atlassian.com/careers/1" {
+		t.Fatalf("expected outbound apply URL, got %s", rec.ApplyURL)
+	}
+}
+
+

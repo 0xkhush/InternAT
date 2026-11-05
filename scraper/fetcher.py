@@ -25,6 +25,14 @@ DEFAULT_HEADERS = {
 BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
 
 
+async def _handle_playwright_route(route) -> None:
+    """Async route handler that aborts heavy media/font requests and continues document/script requests."""
+    if route.request.resource_type in BLOCKED_RESOURCE_TYPES:
+        await route.abort()
+    else:
+        await route.continue_()
+
+
 def needs_js_rendering(html: str) -> bool:
     """Detect whether fetched HTML is an empty SPA shell or requires client-side JS rendering."""
     if not html or len(html.strip()) < 250:
@@ -87,12 +95,7 @@ class HybridFetcher:
         context = await self._browser.new_context(user_agent=DEFAULT_HEADERS["User-Agent"])
         page = await context.new_page()
         try:
-            await page.route(
-                "**/*",
-                lambda route: route.abort()
-                if route.request.resource_type in BLOCKED_RESOURCE_TYPES
-                else route.continue_(),
-            )
+            await page.route("**/*", _handle_playwright_route)
             await page.goto(url, wait_until="domcontentloaded", timeout=int(self.timeout * 1000))
             await page.wait_for_timeout(1200)
             return await page.content()

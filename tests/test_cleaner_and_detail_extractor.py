@@ -69,3 +69,23 @@ def test_extract_job_detail_and_structured_record():
     assert "2028" in rec.batch_eligible
     assert rec.apply_url == "https://www.rubrik.com/careers/job/12345"
     assert "WhatsApp" not in rec.job_description
+
+
+def test_jsonld_with_unescaped_control_characters_is_parsed():
+    html_with_ctrl = """
+    <html><head>
+    <script type="application/ld+json">
+    {
+      "@type": "JobPosting",
+      "title": "Backend Intern\t2028\nBatch",
+      "hiringOrganization": {"name": "Atlassian"},
+      "description": "Line 1\nLine 2\twith unescaped newline and tab"
+    }
+    </script>
+    </head><body><article><h1>Backend Intern</h1></article></body></html>
+    """
+    detail = extract_job_detail_from_html(html_with_ctrl, "https://careersat.tech/jobs/atlassian", "careersat")
+    assert detail.company == "Atlassian"
+    assert "Backend Intern" in detail.title
+
+

@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -23,7 +22,7 @@ func main() {
 	fmt.Println("  InterAT 2.0 (Go + Python Hybrid) — ML-Powered Job & Internship Agent")
 	fmt.Println("  • Go Engine: Concurrent 16-Portal Discovery, Fetcher, Outer-First DOM")
 	fmt.Println("  • Python ML: Stage 1 Bi-Encoder (Contrastive) + Stage 2 Cross-Encoder")
-	fmt.Println("  • LLM Agent: GLM-5.3-flash Structured Extraction & Deduplication")
+	fmt.Println("  • Stage 3 & 4: JSON-LD + 4-Layer Data Cleaner -> jobs.json")
 	fmt.Println("========================================================================")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -75,7 +74,7 @@ func main() {
 		sem           = make(chan struct{}, 6)
 	)
 
-	maxPortals := 6
+	maxPortals := 8
 	if len(portals) < maxPortals {
 		maxPortals = len(portals)
 	}
@@ -105,19 +104,59 @@ func main() {
 	}
 	wg.Wait()
 
-	if len(allCandidates) > 0 {
-		fmt.Printf("[Stage 2b: Python ML Bridge] Sending %d DOM candidates to Bi-Encoder + Cross-Encoder...\n", len(allCandidates))
-		mlResp, err := scraper.CallPythonMLBridge(*pythonBin, req, allCandidates, 15)
-		if err == nil {
-			fmt.Printf("  -> Bi-Encoder kept %d job_listing & %d pagination_or_filter | Dropped %d noise candidates\n",
-				len(mlResp.JobListings), len(mlResp.PaginationLinks), mlResp.NoiseCount)
-		}
+	if len(allCandidates) == 0 {
+		fmt.Println("No new unseen DOM candidates found on initial HTTP pass.")
+		return
 	}
 
-	fmt.Println("\n[Stage 3 & 4: Full Detail Extraction & 4-Layer Cleaning -> jobs.json]")
-	cmd := exec.Command(*pythonBin, "main.py", "--query", req.RawQuery, "--yes")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	_ = cmd.Run()
-}
+	fmt.Printf("[Stage 2b: Python ML Bridge] Sending %d DOM candidates to Bi-Encoder + Cross-Encoder...\n", len(allCandidates))
+	mlResp, err := scraper.CallPythonMLBridge(*pythonBin, req, allCandidates, 15)
+	if err != nil {
+		fmt.Printf("ML Bridge error: %v\n", err)
+		return
+	}
+	fmt.Printf("  -> Bi-Encoder kept %d job_listing & %d pagination_or_filter | Dropped %d noise candidates\n",
+		len(mlResp.JobListings), len(mlResp.PaginationLinks), mlResp.NoiseCount)
 
+	fmt.Println("\n[Stage 3 & 4: Go Concurrent Detail Fetch, JSON-LD & 4-Layer Cleaning -> jobs.json]")
+	var (
+		records []scraper.JobRecord
+		recMu   sync.Mutex
+	)
+	for _, cand := range mlResp.JobListings {
+		if seenStore.IsURLSeen(cand.URL) {
+			continue
+		}
+		wg.Add(1)
+		go func(c scraper.DOMCandidate) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			detailHTML, err := scraper.FetchHTML(c.URL, 12*time.Second)
+			if err != nil || len(detailHTML) == 0 {
+				return
+			}
+			rec := scraper.ExtractJobRecordFromHTML(detailHTML, c.URL, c.SourcePortal, c.RelevanceScore)
+			if rec.Title == "" {
+				rec.Title = c.Text
+				rec.JobID = scraper.ComputeJobID(rec.Company, rec.Title, rec.ApplyURL)
+			}
+			recMu.Lock()
+			records = append(records, rec)
+			seenStore.MarkRecordSeen(rec)
+			recMu.Unlock()
+		}(cand)
+	}
+	wg.Wait()
+
+	_ = seenStore.Save()
+	added, _ := scraper.SaveJobsJSON("jobs.json", records)
+	fmt.Printf("Saved %d new clean deduplicated job records to jobs.json\n", added)
+	for i, r := range records {
+		if i >= 10 {
+			break
+		}
+		fmt.Printf("  %d. [%s] %s (Score: %.3f) -> %s\n", i+1, r.Company, r.Title, r.RelevanceScore, r.ApplyURL)
+	}
+}

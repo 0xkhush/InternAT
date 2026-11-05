@@ -64,3 +64,4 @@ def test_seen_jobs_store_deduplicates_urls_and_fingerprints(tmp_path: Path):
     reloaded = SeenJobsStore(store_file)
     assert reloaded.is_url_seen("https://careersat.tech/jobs/rubrik-swe-intern-2028")
     assert reloaded.is_job_seen("rubrik", "Software Engineering Intern", "careersat")
+

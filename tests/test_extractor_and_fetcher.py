@@ -55,3 +55,31 @@ def test_needs_js_rendering_detects_empty_spa_shell():
     rich_ssr = SAMPLE_CAREERSAT_HTML
     assert needs_js_rendering(empty_react) is True
     assert needs_js_rendering(rich_ssr) is False
+
+
+def test_article_with_inner_header_or_footer_resolves_to_article():
+    html_nested = """
+    <html><body>
+      <main>
+        <article class="job-card">
+          <header><h2><a href="/jobs/stripe-swe-intern-2028">Stripe SWE Intern 2028</a></h2></header>
+          <footer><span>Bengaluru • ₹90,000/month</span><a href="/jobs/stripe-swe-intern-2028">Apply</a></footer>
+        </article>
+      </main>
+      <footer>
+        <nav aria-label="Footer"><a href="/terms">Terms</a></nav>
+      </footer>
+    </body></html>
+    """
+    cands = extract_dom_candidates(html_nested, "https://careersat.tech/jobs", "careersat")
+    by_path = {c.url_path: c for c in cands}
+    assert by_path["/jobs/stripe-swe-intern-2028"].region == "article"
+    assert by_path["/terms"].region == "footer"
+
+
+def test_playwright_route_handler_is_async_coroutine():
+    import inspect
+    from scraper.fetcher import _handle_playwright_route
+    assert inspect.iscoroutinefunction(_handle_playwright_route)
+
+

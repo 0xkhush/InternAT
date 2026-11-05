@@ -33,31 +33,28 @@ def _clean_whitespace(text: str) -> str:
 
 
 def resolve_region(tag: Tag) -> RegionType:
-    """Resolve the semantic DOM region of a tag using outer-first chrome precedence.
+    """Resolve the semantic DOM region of a tag walking outermost-to-innermost ancestors.
 
-    Outer chrome tags (`footer`, `header`, `aside`) override nested `<nav>` or `<article>`,
-    ensuring `<nav aria-label="Footer">` inside `<footer>` is always tagged `region="footer"`.
+    - Outer chrome tags (`footer`, `header`, `aside`, `nav`) take precedence over anything nested inside them
+      (e.g., `<nav aria-label="Footer">` inside `<footer>` resolves to `"footer"`).
+    - Once an `<article>` card boundary is entered, inner `<header>` or `<footer>` sub-elements inside the card
+      remain `"article"`.
     """
     ancestors = [p.name.lower() for p in tag.parents if isinstance(p, Tag) and p.name]
     if tag.name:
         ancestors.insert(0, tag.name.lower())
 
-    ancestor_set = set(ancestors)
-    # 1. Chrome regions take strict outer precedence over inner nav/div
-    if "footer" in ancestor_set:
-        return "footer"
-    if "header" in ancestor_set:
-        return "header"
-    if "aside" in ancestor_set:
-        return "aside"
-    if "nav" in ancestor_set:
-        return "nav"
-    # 2. Content regions: article inside main resolves to "article"
-    if "article" in ancestor_set:
-        return "article"
-    if "main" in ancestor_set:
-        return "main"
-    return "body"
+    # Walk from outermost (root/body) to innermost (the tag itself)
+    in_main = False
+    for name in reversed(ancestors):
+        if name in ("footer", "header", "aside", "nav"):
+            return name  # type: ignore[return-value]
+        if name == "article":
+            return "article"
+        if name == "main":
+            in_main = True
+
+    return "main" if in_main else "body"
 
 
 def _build_tag_path(tag: Tag, max_depth: int = 5) -> str:

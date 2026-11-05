@@ -10,7 +10,7 @@ import (
 var (
 	stripBlocksRe = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>|<style\b[^>]*>.*?</style>|<noscript\b[^>]*>.*?</noscript>|<svg\b[^>]*>.*?</svg>|<template\b[^>]*>.*?</template>|<canvas\b[^>]*>.*?</canvas>|<iframe\b[^>]*>.*?</iframe>`)
 	commentRe     = regexp.MustCompile(`(?s)<!--.*?-->`)
-	tagTokenRe    = regexp.MustCompile(`(?is)<(/?)([a-z0-9]+)(?:\s+([^>]*))?>`)
+	tagTokenRe    = regexp.MustCompile(`(?is)<(/?)([a-z0-9]+)((?:[^>"']|"[^"]*"|'[^']*')*)>`)
 	hrefAttrRe    = regexp.MustCompile(`(?i)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+))`)
 	hiddenAttrRe  = regexp.MustCompile(`(?i)(\bhidden\b|aria-hidden\s*=\s*["']true["'])`)
 	htmlTagsRe    = regexp.MustCompile(`(?s)<[^>]+>`)
@@ -69,28 +69,25 @@ func isVoidElement(tag string) bool {
 }
 
 func resolveNodeRegion(node *domNode) string {
-	hasTag := map[string]bool{}
+	var chain []string
 	for curr := node; curr != nil; curr = curr.parent {
 		if curr.tag != "" {
-			hasTag[curr.tag] = true
+			chain = append(chain, curr.tag)
 		}
 	}
-	if hasTag["footer"] {
-		return "footer"
+	inMain := false
+	// Walk from outermost (root/body) to innermost (the node itself)
+	for i := len(chain) - 1; i >= 0; i-- {
+		switch chain[i] {
+		case "footer", "header", "aside", "nav":
+			return chain[i]
+		case "article":
+			return "article"
+		case "main":
+			inMain = true
+		}
 	}
-	if hasTag["header"] {
-		return "header"
-	}
-	if hasTag["aside"] {
-		return "aside"
-	}
-	if hasTag["nav"] {
-		return "nav"
-	}
-	if hasTag["article"] {
-		return "article"
-	}
-	if hasTag["main"] {
+	if inMain {
 		return "main"
 	}
 	return "body"

@@ -74,10 +74,11 @@ def _extract_jsonld_job_posting(soup: BeautifulSoup) -> dict[str, Any]:
         raw_txt = (script.string or script.get_text() or "").strip()
         if not raw_txt:
             continue
-        # Remove trailing commas before } or ]
+        # Remove trailing commas before } or ] and strip non-whitespace control chars
         sanitized = re.sub(r",\s*([}\]])", r"\1", raw_txt)
+        sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", sanitized)
         try:
-            parsed = json.loads(sanitized)
+            parsed = json.loads(sanitized, strict=False)
         except json.JSONDecodeError:
             continue
         found = _find_job_posting_in_jsonld(parsed)
