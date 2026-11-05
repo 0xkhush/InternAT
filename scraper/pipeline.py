@@ -7,18 +7,43 @@ import json
 import logging
 from typing import Any
 
-from scraper.config import Settings, resolve_portal_for_url
-from scraper.dedup import SeenJobsStore
+from scraper.config import TARGET_PORTALS, Settings, resolve_portal_for_url
+from scraper.dedup import SeenJobsStore, normalize_url
 from scraper.detail_extractor import RawJobDetail, extract_job_detail_from_html
 from scraper.discovery import discover_candidate_urls
 from scraper.extractor import extract_dom_candidates
 from scraper.fetcher import HybridFetcher
 from scraper.llm_extractor import StructuredJobExtractor
-from scraper.ml_classifier import BiEncoderClassifier
+from scraper.ml_classifier import JOB_URL_PATTERNS, NOISE_URL_PATTERNS, PAGINATION_URL_PATTERNS, BiEncoderClassifier
 from scraper.reranker import CrossEncoderReranker
 from scraper.schemas import DOMCandidate, JobRecord, JobSearchRequirement
 
 logger = logging.getLogger(__name__)
+
+PORTAL_ROOT_URLS = {normalize_url(p.entry_url) for p in TARGET_PORTALS}
+
+
+def _is_direct_job_detail_url(url: str) -> bool:
+    """Return True if a discovered URL is already a specific job detail page (e.g. from DuckDuckGo) rather than a listing root."""
+    norm = normalize_url(url)
+    if norm in PORTAL_ROOT_URLS:
+        return False
+    if NOISE_URL_PATTERNS.search(norm) or PAGINATION_URL_PATTERNS.search(norm):
+        return False
+    if any(
+        pat in norm
+        for pat in (
+            "/jobs/view/",
+            "job_details.php",
+            "apply_page.php",
+            "/job/",
+            "greenhouse.io",
+            "lever.co",
+            "myworkdayjobs.com",
+        )
+    ):
+        return True
+    return bool(JOB_URL_PATTERNS.search(norm) and "/jobs/search" not in norm and not norm.endswith(("/jobs", "/internship", "/internships")))
 
 
 class JobScraperPipeline:
@@ -35,7 +60,7 @@ class JobScraperPipeline:
     async def run(
         self,
         req: JobSearchRequirement,
-        max_listing_pages: int = 32,
+        max_listing_pages: int = 80,
         max_detail_pages: int = 20,
         enable_ddg: bool = True,
     ) -> dict[str, Any]:
@@ -49,7 +74,29 @@ class JobScraperPipeline:
         total_noise_dropped = 0
 
         try:
-            # Stage 2: Fetch listing pages & classify DOM candidates with Stage 1 Bi-Encoder
+            # Stage 2: Fetch discovered pages & classify DOM candidates with Stage 1 Bi-Encoder.
+            # If a DuckDuckGo result URL is ALREADY a direct job detail page (e.g. linkedin.com/jobs/view/...,
+            # talentbattle.in/Job/..., or an external company career page not in the 17 portals),
+            # register it directly as a job candidate so it is guaranteed to be scraped in Stage 3!
+            direct_ddg_job_urls: set[str] = set()
+            for url, portal_id in listing_targets:
+                if _is_direct_job_detail_url(url) or portal_id == "external":
+                    if not self.seen_store.is_url_seen(url):
+                        slug_text = url.rstrip("/").split("/")[-1].replace("-", " ")
+                        all_job_candidates.append(
+                            DOMCandidate(
+                                url=url,
+                                url_path="/" + "/".join(url.split("/")[3:]),
+                                text=slug_text or "Job Opening",
+                                context=f"Direct search result from {portal_id} ({url})",
+                                region="article",
+                                sibling_count=10,
+                                source_portal=portal_id,
+                                predicted_label="job_listing",
+                                confidence=0.95,
+                            )
+                        )
+                        direct_ddg_job_urls.add(url)
             sem = asyncio.Semaphore(4)
 
             async def _fetch_and_extract(url: str, portal_id: str) -> list[DOMCandidate]:
@@ -73,10 +120,12 @@ class JobScraperPipeline:
 
             if flat_cands:
                 classified, _ = self.bi_encoder.classify_candidates(flat_cands)
+                seen_cand_urls = set(direct_ddg_job_urls)
                 for c in classified:
                     if c.predicted_label == "job_listing":
-                        if not self.seen_store.is_url_seen(c.url):
+                        if not self.seen_store.is_url_seen(c.url) and c.url not in seen_cand_urls:
                             all_job_candidates.append(c)
+                            seen_cand_urls.add(c.url)
                     elif c.predicted_label == "pagination_or_filter":
                         all_pagination_candidates.append(c)
                     else:

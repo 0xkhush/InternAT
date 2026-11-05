@@ -87,7 +87,7 @@ func Build16SiteSearchQueries(req JobSearchRequirement) []string {
 
 	queries := make([]string, 0, len(portals))
 	for _, p := range portals {
-		q := fmt.Sprintf("site:%s (%s OR SDE) %s %s %s", p.Domain, roleTerm, typeTerm, batchTerm, locTerm)
+		q := fmt.Sprintf("site:%s %s %s %s %s", p.Domain, roleTerm, typeTerm, batchTerm, locTerm)
 		queries = append(queries, q)
 	}
 	return queries

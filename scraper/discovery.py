@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_16_site_search_queries(req: JobSearchRequirement) -> list[str]:
-    """Generate 16 clean per-portal DuckDuckGo search queries (no quotes on batch/location so DDG's native site: filter triggers)."""
+    """Generate clean per-portal DuckDuckGo search queries (no 'OR SDE' or quotes around batch/location so DDG's native site: filter returns maximum quality)."""
     role_term = req.role_keywords[0] if req.role_keywords else "software engineering"
     type_term = "internship" if req.job_type == "internship" else "jobs"
     batch_term = req.target_batches[0] if req.target_batches else "fresher"
@@ -22,7 +22,7 @@ def build_16_site_search_queries(req: JobSearchRequirement) -> list[str]:
 
     queries: list[str] = []
     for portal in TARGET_PORTALS:
-        q = f"site:{portal.domain} ({role_term} OR SDE) {type_term} {batch_term} {loc_str}".strip()
+        q = f"site:{portal.domain} {role_term} {type_term} {batch_term} {loc_str}".strip()
         queries.append(q)
 
     return queries
@@ -68,23 +68,33 @@ def discover_candidate_urls(
     max_ddg_results_per_query: int = 8,
     enable_ddg: bool = True,
 ) -> list[tuple[str, str]]:
-    """Run 16-portal DuckDuckGo discovery + direct portal templates, filtering out already-seen detail URLs."""
+    """Run per-portal DuckDuckGo discovery + direct portal templates, filtering out already-seen detail URLs.
+
+    During each portal's DuckDuckGo query turn (`site:<portal.domain> ...`), we keep only links belonging to:
+      1. That portal's domain (`target_portal.id`), OR
+      2. External websites not in our 17-portal list (`portal is None`, e.g. greenhouse/workday/company career pages).
+    Links belonging to one of the *other* 16 portals are skipped during this turn because they will be
+    scraped in their own dedicated `site:` query turn.
+    """
     discovered: list[tuple[str, str]] = []
     seen_in_batch: set[str] = set()
 
-    def _register(url: str, default_portal: str = "external") -> None:
+    def _register(url: str, default_portal: str = "external", allowed_portal_id: str | None = None) -> None:
         norm = normalize_url(url)
         if not norm or norm in seen_in_batch:
             return
         if seen_store.is_url_seen(norm):
             return
         portal = resolve_portal_for_url(norm)
+        # If this URL came from a specific portal's DDG turn, skip it if it belongs to a *different* known portal
+        # (since that other portal has its own dedicated `site:` turn). Keep same-portal links + external sites.
+        if allowed_portal_id is not None and portal is not None and portal.id != allowed_portal_id:
+            return
         portal_id = portal.id if portal else default_portal
         seen_in_batch.add(norm)
         discovered.append((norm, portal_id))
 
-    # 1. Always register high-yield direct portal search & entry URLs FIRST so listing_targets[:max_listing_pages]
-    # never starves direct portals behind individual DuckDuckGo results.
+    # 1. Always register high-yield direct portal search & entry URLs FIRST
     for url, portal_id in build_direct_portal_urls(req):
         _register(url, portal_id)
 
@@ -94,13 +104,13 @@ def discover_candidate_urls(
             from ddgs import DDGS
 
             with DDGS() as ddgs:
-                for q in queries:
+                for portal, q in zip(TARGET_PORTALS, queries):
                     try:
                         results = ddgs.text(q, region="in-en", max_results=max_ddg_results_per_query)
                         for r in results or []:
                             href = r.get("href") or r.get("url") or ""
                             if href:
-                                _register(href)
+                                _register(href, default_portal="external", allowed_portal_id=portal.id)
                     except Exception as exc:
                         logger.debug("DDG query failed for %s: %s", q, exc)
         except ImportError:
@@ -110,7 +120,7 @@ def discover_candidate_urls(
             from urllib.parse import parse_qs, unquote, urlparse
 
             headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-            for q in queries:
+            for portal, q in zip(TARGET_PORTALS, queries):
                 try:
                     resp = httpx.get(
                         f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",
@@ -126,7 +136,7 @@ def discover_candidate_urls(
                                 if qs.get("uddg"):
                                     raw_href = unquote(qs["uddg"][0])
                             if raw_href.startswith("http"):
-                                _register(raw_href)
+                                _register(raw_href, default_portal="external", allowed_portal_id=portal.id)
                 except Exception as exc:
                     logger.debug("DDG HTML fallback failed for %s: %s", q, exc)
         except Exception as exc:
