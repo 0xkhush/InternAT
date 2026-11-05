@@ -183,9 +183,13 @@ class StructuredJobExtractor:
         self.batch_size = batch_size
 
     def _call_glm_batch(self, batch: list[RawJobDetail], req: JobSearchRequirement) -> list[JobRecord]:
-        from openai import OpenAI
+        import httpx
 
-        client = OpenAI(api_key=self.settings.glm_api_key, base_url=self.settings.glm_base_url)
+        url = f"{self.settings.glm_base_url.rstrip('/')}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.settings.glm_api_key}",
+            "Content-Type": "application/json",
+        }
         items_payload = [
             {
                 "index": idx,
@@ -201,10 +205,10 @@ class StructuredJobExtractor:
         ]
 
         system_prompt = (
-            "You are a precise job data extraction engine. Given raw job postings, return a JSON object "
+            "You are a precise job data extraction engine. Given raw job postings, return a valid JSON object "
             "with key 'jobs' containing an array of clean job records. Never hallucinate missing fields: "
             "use 'Not Disclosed' for unknown salary/stipend and 'Not Specified' for unknown dates/eligibility. "
-            "Strip any promotional WhatsApp/Telegram/social media text from job_description."
+            "Strip any promotional WhatsApp/Telegram/social media text from job_description. Output JSON only."
         )
         user_prompt = (
             f"User search requirement: {req.to_search_summary()}\n\n"
@@ -212,16 +216,18 @@ class StructuredJobExtractor:
             f"{json.dumps(items_payload, ensure_ascii=False)}"
         )
 
-        resp = client.chat.completions.create(
-            model=self.settings.glm_model,
-            messages=[
+        payload = {
+            "model": self.settings.glm_model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
-        content = resp.choices[0].message.content or "{}"
+            "temperature": 0.1,
+        }
+        resp = httpx.post(url, headers=headers, json=payload, timeout=45.0)
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"] or "{}"
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
         parsed = json.loads(content)
         jobs_list = parsed.get("jobs", []) if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
 

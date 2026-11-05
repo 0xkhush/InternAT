@@ -101,33 +101,41 @@ class IntakeAgent:
 
         if self.use_llm:
             try:
-                from openai import OpenAI
+                import httpx
 
-                client = OpenAI(api_key=self.settings.glm_api_key, base_url=self.settings.glm_base_url)
-                resp = client.chat.completions.create(
-                    model=self.settings.glm_model,
-                    messages=[
+                url = f"{self.settings.glm_base_url.rstrip('/')}/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {self.settings.glm_api_key}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": self.settings.glm_model,
+                    "messages": [
                         {
                             "role": "system",
                             "content": (
-                                "Extract job search criteria from the user's message into JSON with keys: "
+                                "Extract job search criteria from the user's message into a valid JSON object with keys: "
                                 "role_keywords (list[str]), job_type ('internship'|'full_time'|'both'), "
                                 "target_batches (list[str]), experience_level (str), locations (list[str]), "
                                 "work_mode ('onsite'|'remote'|'hybrid'|'any'), min_stipend_or_salary (str|null), "
-                                "skills (list[str])."
+                                "skills (list[str]). Output JSON only."
                             ),
                         },
                         {"role": "user", "content": user_input},
                     ],
-                    temperature=0.1,
-                    response_format={"type": "json_object"},
-                )
-                data = json.loads(resp.choices[0].message.content or "{}")
+                    "temperature": 0.1,
+                }
+                resp = httpx.post(url, headers=headers, json=payload, timeout=25.0)
+                resp.raise_for_status()
+                raw_content = resp.json()["choices"][0]["message"]["content"] or "{}"
+                # Strip markdown code fences if present
+                raw_content = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_content.strip(), flags=re.I)
+                data = json.loads(raw_content)
                 return JobSearchRequirement(
                     raw_query=user_input,
                     role_keywords=data.get("role_keywords") or heur["roles"] or ["Software Engineering", "SDE"],
                     job_type=data.get("job_type") or heur["job_type"],
-                    target_batches=data.get("target_batches") or heur["batches"],
+                    target_batches=[str(b) for b in (data.get("target_batches") or heur["batches"])],
                     experience_level=data.get("experience_level") or "Fresher / 0 years / Student",
                     locations=normalize_locations(data.get("locations") or heur["locations"] or ["India"]),
                     work_mode=data.get("work_mode") or heur["work_mode"],
