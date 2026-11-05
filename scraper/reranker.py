@@ -28,18 +28,12 @@ def passes_card_context_prefilter(candidate: DOMCandidate, req: JobSearchRequire
         return False
 
     # 2. If user specified target batches (e.g., ["2028"]) and the card explicitly lists batch years,
-    # reject if it only lists older batches (<= 2025) and does not mention the target batch or adjacent fresher batch.
+    # reject if none of the user's target batches appear in the card's mentioned batch years.
     if req.target_batches:
         mentioned_years = set(BATCH_YEARS_RE.findall(combined))
         if mentioned_years:
             target_set = set(req.target_batches)
-            # Allow if target batch is mentioned, or if card mentions recent student batches (e.g. 2027 when looking for 2028)
-            allowed_years = set(target_set)
-            for tb in target_set:
-                if tb.isdigit():
-                    allowed_years.add(str(int(tb) - 1))
-                    allowed_years.add(str(int(tb) + 1))
-            if mentioned_years.isdisjoint(allowed_years) and all(int(y) <= 2025 for y in mentioned_years):
+            if mentioned_years.isdisjoint(target_set):
                 return False
 
     return True

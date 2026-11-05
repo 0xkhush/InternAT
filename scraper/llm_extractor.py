@@ -46,7 +46,30 @@ KNOWN_SKILLS = [
     "PyTorch",
 ]
 
-BATCH_RE = re.compile(r"\b(202[5-9])\b")
+BATCH_LINE_KEYWORDS = ("batch", "passout", "pass out", "graduat", "class of", "eligible", "b.tech", "b.e", "student", "yop")
+BATCH_RE = re.compile(r"\b(202[4-9]|2030)\b")
+
+
+def _extract_batches_from_text(title: str, body: str, default_batches: list[str]) -> list[str]:
+    """Extract graduation batch years only from batch/eligibility context (ignoring 2026 posting dates)."""
+    found: set[str] = set()
+    # Check title first (unless it's 'Recruitment 2026' / 'Drive 2026')
+    title_clean = re.sub(r"\b(?:recruitment|drive|hiring|off\s*campus|summer|winter)\s+2026\b", "", title, flags=re.I)
+    for m in BATCH_RE.findall(title_clean):
+        found.add(m)
+
+    for line in body.splitlines():
+        ll = line.lower()
+        # Skip posted date / copyright lines
+        if any(skip in ll for skip in ("posted", "published", "copyright", "updated on", "date:")):
+            continue
+        if any(kw in ll for kw in BATCH_LINE_KEYWORDS):
+            for yr in BATCH_RE.findall(line):
+                found.add(yr)
+
+    if found:
+        return sorted(found)
+    return list(default_batches) if default_batches else ["Not Specified"]
 SALARY_RE = re.compile(
     r"((?:₹|INR|Rs\.?)\s*[\d,.]+\s*(?:-\s*(?:₹|INR|Rs\.?)?\s*[\d,.]+)?\s*(?:LPA|Lakh|K|/\s*month|per\s*month|/mo|pm)?)",
     re.IGNORECASE,
@@ -131,9 +154,7 @@ def _deterministic_extract_single(detail: RawJobDetail, req: JobSearchRequiremen
     else:
         job_type = "Full-Time"
 
-    batches = sorted(set(BATCH_RE.findall(combined)))
-    if not batches:
-        batches = list(req.target_batches) if req.target_batches else ["Not Specified"]
+    batches = _extract_batches_from_text(title, body, req.target_batches)
 
     locs = _extract_location_from_jsonld(jld, combined)
     work_mode = "Remote" if "Remote" in locs or "remote" in combined.lower() else ("Hybrid" if "hybrid" in combined.lower() else "Onsite")

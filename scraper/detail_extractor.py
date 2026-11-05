@@ -109,6 +109,9 @@ def _extract_outbound_apply_url(soup: BeautifulSoup, source_url: str) -> str:
             score += 5
         if host != source_host:
             score += 3
+        elif "apply" not in abs_url.lower():
+            # Same-domain links that aren't explicit apply endpoints (e.g. related blog posts) are not apply links
+            continue
         if any(
             ats in host
             for ats in (

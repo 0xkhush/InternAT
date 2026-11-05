@@ -133,10 +133,16 @@ class JobScraperPipeline:
             raw_details = await asyncio.gather(*[_fetch_detail(c) for c in top_job_candidates])
             valid_details = [d for d in raw_details if d is not None]
 
-            # Stage 4: Batched GLM-5.3-flash structured extraction + deduplication
+            # Stage 4: Batched GLM-5.3-flash structured extraction + strict batch filter + deduplication
             extracted_records = self.job_extractor.extract_batch(valid_details, req)
             final_records: list[JobRecord] = []
+            target_batch_set = set(req.target_batches)
             for rec in extracted_records:
+                # If the user asked for specific batches (e.g. 2028) and the job explicitly lists batch years,
+                # drop jobs that only allow other batches (e.g. 2026/2027 only)
+                rec_years = {b for b in rec.batch_eligible if b.isdigit()}
+                if target_batch_set and rec_years and rec_years.isdisjoint(target_batch_set):
+                    continue
                 if self.seen_store.is_job_seen(rec.company, rec.title, rec.source_portal, rec.apply_url):
                     continue
                 self.seen_store.mark_seen(rec)
