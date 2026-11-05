@@ -12,10 +12,17 @@ import (
 	"interat-scraper/internal/scraper"
 )
 
+func defaultPythonBin() string {
+	if _, err := os.Stat("/opt/anaconda3/bin/python"); err == nil {
+		return "/opt/anaconda3/bin/python"
+	}
+	return "python3"
+}
+
 func main() {
 	queryFlag := flag.String("query", "", "Initial job search query (e.g. '2028 internship software engineering india')")
 	autoYes := flag.Bool("yes", false, "Skip interactive clarification prompt")
-	pythonBin := flag.String("python", "python3", "Python binary for Bi-Encoder / Cross-Encoder ML bridge")
+	pythonBin := flag.String("python", defaultPythonBin(), "Python binary for Bi-Encoder / Cross-Encoder ML bridge")
 	flag.Parse()
 
 	fmt.Println("========================================================================")
