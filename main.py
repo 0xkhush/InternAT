@@ -15,7 +15,7 @@ from scraper.pipeline import JobScraperPipeline
 async def run_interactive_cli(
     initial_query: str | None = None,
     skip_clarification: bool = False,
-    top_k: int = 15,
+    top_k: int = 20,
     reset_seen: bool = False,
 ) -> None:
     settings = Settings()
@@ -75,7 +75,26 @@ async def run_interactive_cli(
     )
     print("-" * 72)
 
-    for idx, job in enumerate(result["job_listings"][:top_k], 1):
+    display_jobs = list(result["job_listings"][:top_k])
+    if len(display_jobs) < top_k and settings.output_jobs_path.exists():
+        try:
+            saved_all = json.loads(settings.output_jobs_path.read_text(encoding="utf-8"))
+            seen_ids = {j.get("job_id") for j in display_jobs}
+            target_batches = set(req.target_batches)
+            for j in reversed(saved_all):
+                if len(display_jobs) >= top_k:
+                    break
+                if j.get("job_id") in seen_ids:
+                    continue
+                j_batches = {b for b in j.get("batch_eligible", []) if str(b).isdigit()}
+                if target_batches and j_batches and j_batches.isdisjoint(target_batches):
+                    continue
+                display_jobs.append(j)
+                seen_ids.add(j.get("job_id"))
+        except Exception:
+            pass
+
+    for idx, job in enumerate(display_jobs[:top_k], 1):
         print(
             f"{idx}. [{job['company']}] {job['title']} — {', '.join(job['location'])} "
             f"({job['stipend_or_salary']}) | Batch: {', '.join(job['batch_eligible'])}\n"
@@ -87,7 +106,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="InterAT 2.0 Conversational Job Scraper CLI")
     parser.add_argument("--query", type=str, default=None, help="Initial job search query")
     parser.add_argument("--yes", action="store_true", help="Skip interactive clarification prompt")
-    parser.add_argument("--top-k", type=int, default=15, help="Top-K job detail pages to keep after Cross-Encoder re-ranking (default: 15)")
+    parser.add_argument("--top-k", type=int, default=20, help="Top-K job detail pages to display/keep (default: 20)")
     parser.add_argument("--reset-seen", action="store_true", help="Clear data/seen_jobs.json before running")
     args = parser.parse_args()
     asyncio.run(

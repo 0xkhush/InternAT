@@ -35,8 +35,8 @@ class JobScraperPipeline:
     async def run(
         self,
         req: JobSearchRequirement,
-        max_listing_pages: int = 18,
-        max_detail_pages: int = 15,
+        max_listing_pages: int = 20,
+        max_detail_pages: int = 20,
         enable_ddg: bool = True,
     ) -> dict[str, Any]:
         """Run the full scraping pipeline for a user's JobSearchRequirement."""
@@ -105,8 +105,11 @@ class JobScraperPipeline:
                         elif c.predicted_label == "noise":
                             total_noise_dropped += 1
 
+            # Over-fetch detail candidates (2x max_detail_pages) so strict post-detail batch filtering
+            # still yields up to max_detail_pages (20) matching jobs!
+            candidate_fetch_limit = max(max_detail_pages * 2, 35)
             top_job_candidates = self.reranker.rerank(
-                all_job_candidates, req, top_k=max_detail_pages
+                all_job_candidates, req, top_k=candidate_fetch_limit
             )
 
             # Stage 3: Fetch surviving Job Detail pages & run 4-Layer Data Cleaning
@@ -138,6 +141,8 @@ class JobScraperPipeline:
             final_records: list[JobRecord] = []
             target_batch_set = set(req.target_batches)
             for rec in extracted_records:
+                if len(final_records) >= max_detail_pages:
+                    break
                 # If the user asked for specific batches (e.g. 2028) and the job explicitly lists batch years,
                 # drop jobs that only allow other batches (e.g. 2026/2027 only)
                 rec_years = {b for b in rec.batch_eligible if b.isdigit()}
