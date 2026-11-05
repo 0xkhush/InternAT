@@ -75,7 +75,7 @@ async def run_interactive_cli(
     )
     print("-" * 72)
 
-    for idx, job in enumerate(result["job_listings"][:10], 1):
+    for idx, job in enumerate(result["job_listings"][:top_k], 1):
         print(
             f"{idx}. [{job['company']}] {job['title']} — {', '.join(job['location'])} "
             f"({job['stipend_or_salary']}) | Batch: {', '.join(job['batch_eligible'])}\n"

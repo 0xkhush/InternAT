@@ -162,7 +162,7 @@ func main() {
 	added, _ := scraper.SaveJobsJSON("jobs.json", records)
 	fmt.Printf("Saved %d new clean deduplicated job records to jobs.json\n", added)
 	for i, r := range records {
-		if i >= 10 {
+		if i >= *topKFlag {
 			break
 		}
 		fmt.Printf("  %d. [%s] %s (Score: %.3f) -> %s\n", i+1, r.Company, r.Title, r.RelevanceScore, r.ApplyURL)
