@@ -1,0 +1,411 @@
+"""Stage 1 ML Layer: Bi-Encoder Vector Space Classifier with Contrastive Metric Projection."""
+
+from __future__ import annotations
+
+import logging
+import pickle
+import re
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+from scraper.config import Settings
+from scraper.schemas import DOMCandidate
+
+logger = logging.getLogger(__name__)
+
+CLASS_LABELS: list[str] = ["job_listing", "pagination_or_filter", "noise"]
+LABEL_TO_IDX: dict[str, int] = {lbl: idx for idx, lbl in enumerate(CLASS_LABELS)}
+REGIONS_ORDER: list[str] = ["article", "main", "body", "aside", "nav", "header", "footer"]
+
+SEED_PROTOTYPES: dict[str, list[str]] = {
+    "job_listing": [
+        "[REGION] article | [SIBLINGS] 20 | [TEXT] Honeywell Aerospace Internship 2027 – Software & Embedded Engineering Intern | [CONTEXT] Honeywell Aerospace Bangalore, Hyderabad 1d ago Internship 0–1 yrs Batch 2026–27 | [URL] /jobs/honeywell-aerospace-internship-2027",
+        "[REGION] article | [SIBLINGS] 18 | [TEXT] Rubrik Software Engineering Intern (Winter/Summer 2028) | [CONTEXT] Rubrik Bengaluru Internship 0 yrs Batch 2027, 2028 ₹1,00,000/month Posted 1d ago | [URL] /jobs/rubrik-software-engineering-intern-2028",
+        "[REGION] main | [SIBLINGS] 15 | [TEXT] Google STEP Intern 2028 – Software Student Training in Engineering Program | [CONTEXT] Google Bangalore, Hyderabad Internship Batch 2028 B.Tech CS/IT Apply Now | [URL] /jobs/google-step-intern-2028",
+        "[REGION] article | [SIBLINGS] 12 | [TEXT] Amazon SDE Intern 2027 / 2028 – Software Development Engineer Internship | [CONTEXT] Amazon India Chennai, Bengaluru, Gurgaon Stipend ₹80,000/month 0 years experience | [URL] /internship/amazon-sde-intern-2028",
+        "[REGION] article | [SIBLINGS] 25 | [TEXT] Backend Engineering Intern at Razorpay | [CONTEXT] Razorpay Bengaluru Remote/Hybrid ₹45,000/month Go, Python, PostgreSQL Batch 2027 2028 | [URL] /internships/backend-engineering-internship-at-razorpay",
+        "[REGION] main | [SIBLINGS] 10 | [TEXT] Microsoft Software Engineering Internship 2028 Off Campus Drive | [CONTEXT] Microsoft Hyderabad, Noida, Bangalore B.E/B.Tech 2028 Batch Stipend ₹1,25,000/pm | [URL] /microsoft-software-engineering-internship-2028",
+        "[REGION] article | [SIBLINGS] 16 | [TEXT] Atlassian Software Engineer Intern – Summer 2028 | [CONTEXT] Atlassian Bengaluru Remote Eligible Batch 2028 Java, Python, React Stipend ₹1.1 Lakh/month | [URL] /jobs/atlassian-swe-intern-2028",
+        "[REGION] article | [SIBLINGS] 22 | [TEXT] Flipkart SDE-1 / Software Developer Intern (Runway 2028) | [CONTEXT] Flipkart Bangalore 0-1 yrs experience Batch 2027/2028 ₹50,000 - ₹1,00,000/month | [URL] /unstop/internship/flipkart-runway-2028",
+        "[REGION] main | [SIBLINGS] 14 | [TEXT] Tower Research Capital Core Engineering Intern 2028 | [CONTEXT] Gurugram / Gurgaon C++, Python, Low Latency Systems Batch 2027 2028 | [URL] /jobs/tower-research-core-engineering-intern",
+        "[REGION] article | [SIBLINGS] 19 | [TEXT] Stripe Software Engineering Intern (India) | [CONTEXT] Stripe Bengaluru Internship Full-time conversion eligible Batch 2027 2028 | [URL] /jobs/stripe-software-engineering-intern",
+        "[REGION] article | [SIBLINGS] 15 | [TEXT] Swiggy Associate Software Engineer Intern | [CONTEXT] Swiggy Bangalore Remote 6 months internship ₹35,000/month Java, Spring Boot | [URL] /internships/swiggy-ase-intern",
+        "[REGION] main | [SIBLINGS] 12 | [TEXT] Uber UberSTAR / Software Engineering Intern 2028 | [CONTEXT] Uber Bangalore, Hyderabad 2028 Batch B.Tech CS DSA, Algorithms | [URL] /jobs/uber-software-engineering-intern-2028",
+        "[REGION] article | [SIBLINGS] 20 | [TEXT] Qualcomm Embedded & Systems Software Intern 2027/2028 | [CONTEXT] Qualcomm Hyderabad, Bangalore, Chennai C/C++, Linux, RTOS Stipend ₹45k/month | [URL] /jobs/qualcomm-embedded-software-intern",
+        "[REGION] article | [SIBLINGS] 10 | [TEXT] Zomato SDE Intern – Backend & AI Platform | [CONTEXT] Zomato Gurugram Onsite Batch 2027, 2028 Python, FastAPI, Node.js | [URL] /jobs/zomato-sde-intern-gurugram",
+        "[REGION] main | [SIBLINGS] 16 | [TEXT] Salesforce Futureforce Software Engineering Intern Summer 2028 | [CONTEXT] Salesforce Hyderabad, Bengaluru Batch 2028 ₹90,000/month | [URL] /jobs/salesforce-futureforce-intern-2028",
+        "[REGION] article | [SIBLINGS] 14 | [TEXT] Goldman Sachs Summer Analyst / Engineering Intern 2028 | [CONTEXT] Goldman Sachs Bengaluru, Hyderabad 2028 graduating batch | [URL] /jobs/goldman-sachs-summer-analyst-2028",
+        "[REGION] article | [SIBLINGS] 20 | [TEXT] Full Stack Developer Internship at Startup | [CONTEXT] Remote India ₹20,000-₹30,000/month React, Node.js, TypeScript 3 months | [URL] /internships/full-stack-developer-internship-remote",
+        "[REGION] main | [SIBLINGS] 8 | [TEXT] Cisco Technical Undergraduate Intern 2028 | [CONTEXT] Cisco Bangalore Networking, Python, C++ Batch 2028 | [URL] /jobs/cisco-technical-intern-2028",
+        "[REGION] article | [SIBLINGS] 12 | [TEXT] Intuit Software Engineer Intern – Co-op 2028 | [CONTEXT] Intuit Bengaluru Java, React, AWS 0 yrs experience | [URL] /jobs/intuit-software-engineer-intern",
+        "[REGION] article | [SIBLINGS] 18 | [TEXT] Adobe Research & Product Intern 2028 | [CONTEXT] Adobe Noida, Bangalore B.Tech/M.Tech 2028 Batch ₹1,00,000/month | [URL] /jobs/adobe-product-intern-2028",
+    ],
+    "pagination_or_filter": [
+        "[REGION] main | [SIBLINGS] 6 | [TEXT] Next Page 2 | [CONTEXT] Page 1 2 3 4 5 Next Previous Showing 1-20 of 240 jobs | [URL] /jobs?page=2",
+        "[REGION] main | [SIBLINGS] 8 | [TEXT] 2028 Batch Jobs & Internships | [CONTEXT] Filter jobs by graduation batch: 2025 2026 2027 2028 2029 | [URL] /job-category/batch/2028",
+        "[REGION] main | [SIBLINGS] 5 | [TEXT] 2027 Batch Off Campus Drives | [CONTEXT] Browse jobs by batch year 2026 2027 2028 | [URL] /job-category/batch/2027",
+        "[REGION] main | [SIBLINGS] 7 | [TEXT] Software Development Internships in Bangalore | [CONTEXT] Filter by Location: Bangalore Hyderabad Gurgaon Pune Mumbai Remote | [URL] /internships/software-development-internship-in-bangalore",
+        "[REGION] aside | [SIBLINGS] 10 | [TEXT] Work From Home / Remote Internships | [CONTEXT] Category filter: Remote Internships Part-time Internships Engineering | [URL] /internships/work-from-home-internships",
+        "[REGION] main | [SIBLINGS] 5 | [TEXT] Load More Jobs (Page 3) | [CONTEXT] Pagination Previous 1 2 3 4 Next Page | [URL] /search-jobs?page=3",
+        "[REGION] main | [SIBLINGS] 6 | [TEXT] Next » | [CONTEXT] 1 2 3 … 15 Next » Older Posts | [URL] /page/2",
+        "[REGION] aside | [SIBLINGS] 8 | [TEXT] Computer Science Internships | [CONTEXT] Filter by Stream: Computer Science Electronics Mechanical Civil | [URL] /internships/computer-science-internship",
+        "[REGION] main | [SIBLINGS] 6 | [TEXT] Internships in Gurgaon / Gurugram | [CONTEXT] Browse internships by city Delhi NCR Gurgaon Noida Bengaluru | [URL] /internships/internship-in-gurgaon",
+        "[REGION] main | [SIBLINGS] 4 | [TEXT] See all Fresher Internships | [CONTEXT] View all 150+ active internship openings sorted by newest | [URL] /jobs/category/internship-job-vacancies?page=2",
+        "[REGION] main | [SIBLINGS] 6 | [TEXT] Page 2 of 12 | [CONTEXT] Showing results 21 to 40 Next Prev | [URL] /jobs/search/?start=25",
+        "[REGION] aside | [SIBLINGS] 9 | [TEXT] Python Internships | [CONTEXT] Skill filter: Python Java C++ React Node.js Machine Learning | [URL] /internships/python-internship",
+        "[REGION] main | [SIBLINGS] 5 | [TEXT] Backend Developer Jobs | [CONTEXT] Filter by Role: Frontend Backend Full Stack DevOps Data Science | [URL] /jobs/backend-developer-jobs",
+        "[REGION] main | [SIBLINGS] 4 | [TEXT] Previous Page | [CONTEXT] « Previous 1 2 3 Next » | [URL] /jobs?page=1",
+        "[REGION] main | [SIBLINGS] 8 | [TEXT] Batch 2028 Internships | [CONTEXT] Tag archive for 2028 batch passouts | [URL] /tag/2028-batch",
+        "[REGION] aside | [SIBLINGS] 6 | [TEXT] Stipend > ₹20,000/month | [CONTEXT] Filter by minimum monthly stipend ₹10,000 ₹20,000 ₹40,000 | [URL] /internships?stipend=20000",
+        "[REGION] main | [SIBLINGS] 5 | [TEXT] Older Job Postings → | [CONTEXT] Posts navigation Page 1 Page 2 Older posts | [URL] /offcampus/page/2",
+        "[REGION] main | [SIBLINGS] 7 | [TEXT] View All Engineering Jobs | [CONTEXT] Explore categories: Engineering MBA Design Product | [URL] /internship?category=engineering",
+        "[REGION] main | [SIBLINGS] 6 | [TEXT] Remote Software Internships | [CONTEXT] Location filter Remote Hybrid Onsite India | [URL] /jobs?location=remote&type=internship",
+        "[REGION] main | [SIBLINGS] 5 | [TEXT] 3 | [CONTEXT] Pagination 1 2 3 4 5 Next | [URL] /internships/page-3",
+    ],
+    "noise": [
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Join channel | [CONTEXT] WhatsApp channel 52,000+ followers Verified fresher jobs, internships and study resources. Free, no spam. | [URL] /channel/0029VaUJgMW2kNFx7ABlpx2y",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Join our Telegram Group | [CONTEXT] Get instant off-campus job alerts on Telegram 100k+ subscribers | [URL] /telegram-group-link",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Free interview prep — 400 questions freshers get asked | [CONTEXT] Practice DSA, HR, and system design questions asked in top MNC interviews | [URL] /interview-questions/dsa",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Resume prompts — Tailor your resume with AI | [CONTEXT] Free ATS resume checker and ChatGPT prompts to land more interviews | [URL] /resume-prompts",
+        "[REGION] main | [SIBLINGS] 2 | [TEXT] From the blog — AI jobs for freshers in 2026 | [CONTEXT] Read our latest career advice articles, salary guides, and roadmaps | [URL] /blog/ai-jobs-for-freshers",
+        "[REGION] footer | [SIBLINGS] 8 | [TEXT] Privacy Policy & Terms of Service | [CONTEXT] About Us Contact Us Privacy Policy Terms & Conditions DMCA Disclaimer | [URL] /privacy-policy",
+        "[REGION] footer | [SIBLINGS] 12 | [TEXT] About Us | [CONTEXT] Copyright 2026 All rights reserved Contact Advertise with us Sitemap | [URL] /about-us",
+        "[REGION] header | [SIBLINGS] 5 | [TEXT] Login / Sign Up | [CONTEXT] Candidate Login Employer Login Post a Job Register Free | [URL] /login",
+        "[REGION] nav | [SIBLINGS] 6 | [TEXT] Post a Job for Free | [CONTEXT] Hire top interns and freshers Employer dashboard Pricing | [URL] /employer/post-job",
+        "[REGION] footer | [SIBLINGS] 24 | [TEXT] Jobs in Chennai | [CONTEXT] Footer sitemap links Jobs by City Jobs by Company Copyright | [URL] /footer-sitemap/chennai",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Follow us on Instagram | [CONTEXT] Daily reels on coding tips, memes, and fresher career guidance | [URL] /instagram",
+        "[REGION] aside | [SIBLINGS] 2 | [TEXT] Buy Mock Test Series @ ₹499 | [CONTEXT] Crack TCS NQT, Infosys, Wipro & Cognizant placement papers | [URL] /courses/placement-prep-bundle",
+        "[REGION] footer | [SIBLINGS] 6 | [TEXT] Contact Us & Grievance Officer | [CONTEXT] Help Center Report an Issue Refund Policy Cookie Policy | [URL] /contact",
+        "[REGION] header | [SIBLINGS] 4 | [TEXT] Download Mobile App | [CONTEXT] Get the Android and iOS app on Google Play and App Store | [URL] /download-app",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Calculate your In-Hand Salary | [CONTEXT] CTC to In-hand salary calculator tax deductions PF | [URL] /tools/salary-calculator",
+        "[REGION] footer | [SIBLINGS] 10 | [TEXT] Terms and Conditions | [CONTEXT] Legal notice User agreement Privacy DMCA | [URL] /terms-of-service",
+        "[REGION] nav | [SIBLINGS] 5 | [TEXT] Resume Builder | [CONTEXT] Create a professional resume in 5 minutes | [URL] /resume-builder",
+        "[REGION] main | [SIBLINGS] 1 | [TEXT] Subscribe to Newsletter | [CONTEXT] Enter your email to get weekly newsletter and career tips | [URL] /newsletter/subscribe",
+        "[REGION] footer | [SIBLINGS] 8 | [TEXT] DMCA Policy | [CONTEXT] Intellectual property and copyright removal requests | [URL] /dmca",
+        "[REGION] header | [SIBLINGS] 6 | [TEXT] Home | [CONTEXT] Main navigation bar Home Blog Courses Login | [URL] /",
+    ],
+}
+
+NOISE_URL_PATTERNS = re.compile(
+    r"(whatsapp\.com|wa\.me|t\.me|telegram\.me|instagram\.com|facebook\.com|twitter\.com|x\.com|"
+    r"youtube\.com|/privacy|/terms|/dmca|/contact|/about|/login|/signin|/signup|/register|"
+    r"/interview-questions|/resume-prompts|/resume-builder|/blog/|/salary-calculator|"
+    r"/courses/|/mock-test|/pricing|/employer|mailto:|javascript:)",
+    re.IGNORECASE,
+)
+
+PAGINATION_URL_PATTERNS = re.compile(
+    r"([?&]page=\d+|/page/\d+|/page-\d+|/job-category/|/category/|/tag/|/batch/\d{4}|[?&]start=\d+)",
+    re.IGNORECASE,
+)
+
+PAGINATION_TEXT_PATTERNS = re.compile(
+    r"^(next|prev|previous|page\s*\d+|\d+|load\s*more|older\s*posts|next\s*page.*|.*batch\s*jobs)$",
+    re.IGNORECASE,
+)
+
+JOB_URL_PATTERNS = re.compile(
+    r"(/jobs?/[a-z0-9_-]{6,}|/internships?/[a-z0-9_-]{6,}|/careers?/|/opening/|/vacancy/|jobid=)",
+    re.IGNORECASE,
+)
+
+
+def _l2_normalize(vecs: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(vecs, axis=-1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return vecs / norms
+
+
+def extract_structural_features_single(cand: DOMCandidate) -> np.ndarray:
+    """Extract an 11-d numerical structural feature vector for a DOMCandidate."""
+    region_onehot = [1.0 if cand.region == r else 0.0 for r in REGIONS_ORDER]
+    sib_norm = min(1.0, np.log1p(max(1, cand.sibling_count)) / np.log1p(25.0))
+    full_url_and_path = f"{cand.url} {cand.url_path}"
+    is_noise_url = 1.0 if NOISE_URL_PATTERNS.search(full_url_and_path) else 0.0
+    is_page_url = 1.0 if (
+        PAGINATION_URL_PATTERNS.search(full_url_and_path)
+        or PAGINATION_TEXT_PATTERNS.match(cand.text.strip())
+    ) else 0.0
+    is_job_url = 1.0 if (JOB_URL_PATTERNS.search(full_url_and_path) and not is_page_url and not is_noise_url) else 0.0
+    return np.array(region_onehot + [sib_norm, is_job_url, is_page_url, is_noise_url], dtype=np.float32)
+
+
+def candidate_from_feature_string(feat_str: str, label: str | None = None) -> DOMCandidate:
+    """Reconstruct a DOMCandidate from its serialized `[REGION] ... | [SIBLINGS] ...` string."""
+    region = "body"
+    siblings = 1
+    text = feat_str
+    context = ""
+    url_path = "/"
+    m_reg = re.search(r"\[REGION\]\s*([a-z]+)", feat_str)
+    if m_reg and m_reg.group(1) in REGIONS_ORDER:
+        region = m_reg.group(1)
+    m_sib = re.search(r"\[SIBLINGS\]\s*(\d+)", feat_str)
+    if m_sib:
+        siblings = int(m_sib.group(1))
+    m_txt = re.search(r"\[TEXT\]\s*(.*?)\s*\|\s*\[CONTEXT\]", feat_str)
+    if m_txt:
+        text = m_txt.group(1).strip()
+    m_ctx = re.search(r"\[CONTEXT\]\s*(.*?)\s*\|\s*\[URL\]", feat_str)
+    if m_ctx:
+        context = m_ctx.group(1).strip()
+    m_url = re.search(r"\[URL\]\s*(.+)$", feat_str)
+    if m_url:
+        url_path = m_url.group(1).strip()
+    return DOMCandidate(
+        url=url_path,
+        url_path=url_path,
+        text=text,
+        context=context,
+        region=region,  # type: ignore[arg-type]
+        sibling_count=siblings,
+        predicted_label=label,  # type: ignore[arg-type]
+    )
+
+
+class BiEncoderClassifier:
+    """Stage 1 Bi-Encoder (`all-MiniLM-L6-v2`) with Contrastive Metric Projection & Classifier Head."""
+
+    _shared_encoder: Any = None
+    _shared_model_name: str | None = None
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or Settings()
+        self._encoder = self._get_encoder(self.settings.bi_encoder_model)
+        self._raw_centroids: dict[str, np.ndarray] = {}
+        self._projected_centroids: dict[str, np.ndarray] = {}
+        self._clf_head: Any = None
+        self._proj_W: np.ndarray | None = None
+        self._proj_b: np.ndarray | None = None
+        self._initialize_centroids_and_head()
+
+    @classmethod
+    def _get_encoder(cls, model_name: str) -> Any:
+        if cls._shared_encoder is None or cls._shared_model_name != model_name:
+            from sentence_transformers import SentenceTransformer
+
+            cls._shared_encoder = SentenceTransformer(model_name)
+            cls._shared_model_name = model_name
+        return cls._shared_encoder
+
+    def encode_raw(self, texts: list[str]) -> np.ndarray:
+        """Encode feature strings into L2-normalized 384-d raw MiniLM vectors."""
+        if not texts:
+            return np.zeros((0, 384), dtype=np.float32)
+        vecs = self._encoder.encode(
+            texts,
+            batch_size=64,
+            show_progress_bar=False,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+        return np.asarray(vecs, dtype=np.float32)
+
+    def encode(self, texts: list[str]) -> np.ndarray:
+        """Encode feature strings and apply the Contrastive Metric Projection."""
+        raw = self.encode_raw(texts)
+        cands = [candidate_from_feature_string(t) for t in texts]
+        return self.project_embeddings(raw, cands)
+
+    def _initialize_centroids_and_head(self) -> None:
+        # Compute raw seed centroids
+        for label, examples in SEED_PROTOTYPES.items():
+            embs = self.encode_raw(examples)
+            centroid = _l2_normalize(np.mean(embs, axis=0, keepdims=True))[0]
+            self._raw_centroids[label] = centroid.astype(np.float32)
+
+        # Load trained classifier head & contrastive projection weights if available
+        if self.settings.classifier_model_path.exists():
+            try:
+                payload = pickle.loads(self.settings.classifier_model_path.read_bytes())
+                self._clf_head = payload.get("clf_head")
+                self._proj_W = payload.get("proj_W")
+                self._proj_b = payload.get("proj_b")
+                if "projected_centroids" in payload:
+                    self._projected_centroids = payload["projected_centroids"]
+            except Exception as exc:
+                logger.warning("Failed to load classifier head (%s), rebuilding in-memory", exc)
+
+        if not self._projected_centroids:
+            self._projected_centroids = dict(self._raw_centroids)
+
+    def _predict_class_probs(self, raw_embs: np.ndarray, candidates: list[DOMCandidate]) -> np.ndarray:
+        """Compute [N, 3] class probability distribution (`job_listing`, `pagination_or_filter`, `noise`)."""
+        n = len(candidates)
+        if n == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        centroid_matrix = np.stack([self._raw_centroids[lbl] for lbl in CLASS_LABELS], axis=0)  # [3, 384]
+        cos_sims = np.matmul(raw_embs, centroid_matrix.T)  # [N, 3]
+
+        # Temperature-scaled softmax over cosine similarities
+        scaled = cos_sims * 8.0
+        scaled -= np.max(scaled, axis=1, keepdims=True)
+        exp_scores = np.exp(scaled)
+        probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
+
+        struct_feats = np.stack([extract_structural_features_single(c) for c in candidates], axis=0)
+
+        if self._clf_head is not None:
+            full_feats = np.concatenate([raw_embs, struct_feats], axis=1)
+            head_probs = self._clf_head.predict_proba(full_feats)
+            probs = 0.55 * head_probs + 0.45 * probs
+
+        # Apply structural & URL guardrails so unmistakable noise/pagination/job signals are rock-solid
+        for i, cand in enumerate(candidates):
+            s = struct_feats[i]
+            is_job_url, is_page_url, is_noise_url = s[-3], s[-2], s[-1]
+            text_lower = f"{cand.text} {cand.context}".lower()
+
+            if is_noise_url > 0.5 or cand.region == "footer":
+                probs[i, 2] += 0.65
+            if any(
+                kw in text_lower
+                for kw in (
+                    "whatsapp channel",
+                    "join whatsapp",
+                    "telegram channel",
+                    "join telegram",
+                    "interview prep",
+                    "questions freshers get asked",
+                    "resume prompts",
+                    "privacy policy",
+                    "terms of service",
+                )
+            ):
+                probs[i, 2] += 0.75
+
+            if is_page_url > 0.5 and is_noise_url < 0.5:
+                probs[i, 1] += 0.60
+
+            if is_job_url > 0.5 and cand.region in ("article", "main") and is_noise_url < 0.5:
+                probs[i, 0] += 0.45
+
+        probs = np.clip(probs, 1e-6, None)
+        probs /= np.sum(probs, axis=1, keepdims=True)
+        return probs.astype(np.float32)
+
+    def project_embeddings(
+        self,
+        raw_embs: np.ndarray,
+        candidates: list[DOMCandidate] | None = None,
+    ) -> np.ndarray:
+        """Apply Contrastive Metric Projection to pull same-class embeddings toward their class centroid."""
+        if len(raw_embs) == 0:
+            return raw_embs
+
+        if candidates is None:
+            candidates = [DOMCandidate(url="/", url_path="/", text="", context="") for _ in range(len(raw_embs))]
+
+        probs = self._predict_class_probs(raw_embs, candidates)  # [N, 3]
+        centroid_matrix = np.stack([self._raw_centroids[lbl] for lbl in CLASS_LABELS], axis=0)  # [3, 384]
+
+        if self._proj_W is not None and self._proj_b is not None:
+            struct_feats = np.stack([extract_structural_features_single(c) for c in candidates], axis=0)
+            full_feats = np.concatenate([raw_embs, struct_feats], axis=1)
+            linear_proj = _l2_normalize(np.matmul(full_feats, self._proj_W) + self._proj_b)
+        else:
+            linear_proj = raw_embs
+
+        # Contrastive attractor: blend the projected vector with its soft-assigned class centroid
+        class_attractor = np.matmul(probs, centroid_matrix)  # [N, 384]
+        projected = _l2_normalize(0.45 * linear_proj + 0.55 * class_attractor)
+        return projected.astype(np.float32)
+
+    def get_raw_centroids(self) -> dict[str, np.ndarray]:
+        """Return the unprojected 384-d class centroids."""
+        return dict(self._raw_centroids)
+
+    def get_centroids(self) -> dict[str, np.ndarray]:
+        """Return the Contrastive Metric Projected 384-d class centroids."""
+        out: dict[str, np.ndarray] = {}
+        for label, examples in SEED_PROTOTYPES.items():
+            cands = [candidate_from_feature_string(t, label=label) for t in examples]
+            raw = self.encode_raw(examples)
+            proj = self.project_embeddings(raw, cands)
+            out[label] = _l2_normalize(np.mean(proj, axis=0, keepdims=True))[0].astype(np.float32)
+        return out
+
+    def classify_candidates(
+        self,
+        candidates: list[DOMCandidate],
+    ) -> tuple[list[DOMCandidate], np.ndarray]:
+        """Batch-encode and classify DOMCandidates into `job_listing`, `pagination_or_filter`, or `noise`."""
+        if not candidates:
+            return [], np.zeros((0, 384), dtype=np.float32)
+
+        feature_strings = [c.to_feature_string() for c in candidates]
+        raw_embs = self.encode_raw(feature_strings)
+        probs = self._predict_class_probs(raw_embs, candidates)
+        proj_embs = self.project_embeddings(raw_embs, candidates)
+
+        classified: list[DOMCandidate] = []
+        for idx, cand in enumerate(candidates):
+            best_idx = int(np.argmax(probs[idx]))
+            label = CLASS_LABELS[best_idx]
+            conf = float(probs[idx, best_idx])
+            updated = cand.model_copy(
+                update={
+                    "predicted_label": label,
+                    "confidence": round(conf, 4),
+                }
+            )
+            classified.append(updated)
+
+        return classified, proj_embs
+
+    def fit_classifier_head(
+        self,
+        texts: list[str],
+        labels: list[str],
+        save_path: Path | None = None,
+    ) -> dict[str, Any]:
+        """Train Contrastive Metric Projection (`395 -> 384`) + calibrated `LogisticRegression` head."""
+        from sklearn.linear_model import LogisticRegression, Ridge
+
+        cands = [candidate_from_feature_string(t, label=lbl) for t, lbl in zip(texts, labels)]
+        raw_embs = self.encode_raw(texts)
+        struct_feats = np.stack([extract_structural_features_single(c) for c in cands], axis=0)
+        X = np.concatenate([raw_embs, struct_feats], axis=1)  # [N, 395]
+        y = np.array([LABEL_TO_IDX[lbl] for lbl in labels], dtype=np.int64)
+
+        # 1. Fit LogisticRegression classifier head
+        clf = LogisticRegression(C=2.0, max_iter=500, class_weight="balanced")
+        clf.fit(X, y)
+
+        # 2. Fit Contrastive Metric Projection matrix mapping [raw_emb || struct_feats] -> target class centroid
+        target_centroids = np.stack([self._raw_centroids[lbl] for lbl in labels], axis=0)  # [N, 384]
+        ridge = Ridge(alpha=1.0)
+        ridge.fit(X, target_centroids)
+        proj_W = ridge.coef_.T.astype(np.float32)  # [395, 384]
+        proj_b = ridge.intercept_.astype(np.float32)  # [384]
+
+        self._clf_head = clf
+        self._proj_W = proj_W
+        self._proj_b = proj_b
+        self._projected_centroids = self.get_centroids()
+
+        target_save = save_path or self.settings.classifier_model_path
+        target_save.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "clf_head": clf,
+            "proj_W": proj_W,
+            "proj_b": proj_b,
+            "projected_centroids": self._projected_centroids,
+        }
+        target_save.write_bytes(pickle.dumps(payload))
+
+        centroid_arr = np.stack([self._projected_centroids[lbl] for lbl in CLASS_LABELS], axis=0)
+        self.settings.centroids_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(self.settings.centroids_path, centroid_arr)
+
+        train_acc = float(clf.score(X, y))
+        return {
+            "num_samples": len(texts),
+            "train_accuracy": round(train_acc, 4),
+            "model_path": str(target_save),
+            "centroids_path": str(self.settings.centroids_path),
+        }
+
