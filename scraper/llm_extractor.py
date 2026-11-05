@@ -107,16 +107,23 @@ def _deterministic_extract_single(detail: RawJobDetail, req: JobSearchRequiremen
     title = detail.title or str(jld.get("title") or "").strip()
     company = detail.company
     if not company or company == "Not Disclosed":
-        # Try to infer company from title e.g. "Rubrik Software Engineering Intern" or "at Razorpay"
-        m_at = re.search(r"\bat\s+([A-Z][A-Za-z0-9&.\s]{1,30})", title)
-        if m_at:
-            company = clean_company_name(m_at.group(1))
-        else:
-            first_word = title.split()[0] if title.split() else "Not Disclosed"
-            if first_word.lower() not in ("software", "sde", "backend", "frontend", "full", "data", "ai", "ml", "intern", "junior"):
-                company = clean_company_name(first_word)
+        # Check "Company Name - Role Title" pattern first (e.g. "Wells Fargo - Technology Program Intern")
+        if " - " in title:
+            prefix = title.split(" - ", 1)[0].strip()
+            if 1 <= len(prefix.split()) <= 4 and not any(
+                w in prefix.lower() for w in ("intern", "software", "sde", "developer", "engineer")
+            ):
+                company = clean_company_name(prefix)
+        if not company or company == "Not Disclosed":
+            m_at = re.search(r"\bat\s+([A-Z][A-Za-z0-9&.\s]{1,30})", title)
+            if m_at:
+                company = clean_company_name(m_at.group(1))
             else:
-                company = "Not Disclosed"
+                first_word = title.split()[0] if title.split() else "Not Disclosed"
+                if first_word.lower() not in ("software", "sde", "backend", "frontend", "full", "data", "ai", "ml", "intern", "junior"):
+                    company = clean_company_name(first_word)
+                else:
+                    company = "Not Disclosed"
 
     emp_type = str(jld.get("employmentType") or "").upper()
     if "INTERN" in emp_type or "intern" in title.lower() or req.job_type == "internship":
@@ -174,10 +181,23 @@ def _deterministic_extract_single(detail: RawJobDetail, req: JobSearchRequiremen
     return normalize_job_record(raw_record)
 
 
+def _to_str_list(val: Any, default: list[str] | None = None) -> list[str]:
+    """Coerce a string or list from LLM JSON into a clean list[str]."""
+    if val is None:
+        return list(default) if default else []
+    if isinstance(val, str):
+        items = [x.strip() for x in re.split(r"[,/|;]+", val) if x.strip()]
+        return items if items else (list(default) if default else [])
+    if isinstance(val, list):
+        items = [str(x).strip() for x in val if str(x).strip()]
+        return items if items else (list(default) if default else [])
+    return [str(val).strip()]
+
+
 class StructuredJobExtractor:
     """Batched `glm-5.3-flash` structured job extractor with deterministic JSON-LD/regex fallback."""
 
-    def __init__(self, settings: Settings | None = None, use_llm: bool = True, batch_size: int = 6) -> None:
+    def __init__(self, settings: Settings | None = None, use_llm: bool = True, batch_size: int = 3) -> None:
         self.settings = settings or Settings()
         self.use_llm = use_llm and bool(self.settings.glm_api_key and self.settings.glm_api_key != "your_glm_api_key_here")
         self.batch_size = batch_size
@@ -224,7 +244,7 @@ class StructuredJobExtractor:
             ],
             "temperature": 0.1,
         }
-        resp = httpx.post(url, headers=headers, json=payload, timeout=45.0)
+        resp = httpx.post(url, headers=headers, json=payload, timeout=65.0)
         resp.raise_for_status()
         content = resp.json()["choices"][0]["message"]["content"] or "{}"
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.I)
@@ -239,17 +259,18 @@ class StructuredJobExtractor:
                 if det:
                     results.append(det)
                 continue
+            dur_val = raw_item.get("duration")
             rec = JobRecord(
                 title=str(raw_item.get("title") or detail.title),
                 company=str(raw_item.get("company") or detail.company or "Not Disclosed"),
                 job_type=str(raw_item.get("job_type") or "Internship"),
-                batch_eligible=raw_item.get("batch_eligible") or (req.target_batches or ["Not Specified"]),
+                batch_eligible=_to_str_list(raw_item.get("batch_eligible"), req.target_batches or ["Not Specified"]),
                 experience_required=str(raw_item.get("experience_required") or "0 years (Fresher / Student)"),
-                location=raw_item.get("location") or ["India"],
+                location=normalize_locations(_to_str_list(raw_item.get("location"), ["India"])),
                 work_mode=str(raw_item.get("work_mode") or "Not Specified"),
                 stipend_or_salary=str(raw_item.get("stipend_or_salary") or "Not Disclosed"),
-                duration=raw_item.get("duration"),
-                skills_required=raw_item.get("skills_required") or [],
+                duration=str(dur_val) if dur_val else None,
+                skills_required=_to_str_list(raw_item.get("skills_required"), []),
                 eligibility_criteria=str(raw_item.get("eligibility_criteria") or "Not Specified"),
                 job_description=str(raw_item.get("job_description") or detail.cleaned_markdown[:400]),
                 posted_date=str(raw_item.get("posted_date") or "Not Specified"),
