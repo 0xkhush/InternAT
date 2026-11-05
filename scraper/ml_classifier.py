@@ -92,7 +92,8 @@ SEED_PROTOTYPES: dict[str, list[str]] = {
 
 NOISE_URL_PATTERNS = re.compile(
     r"(whatsapp\.com|wa\.me|t\.me|telegram\.me|instagram\.com|facebook\.com|twitter\.com|x\.com|"
-    r"youtube\.com|/privacy|/terms|/dmca|/contact|/about|/login|/signin|/signup|/register|"
+    r"youtube\.com|linkedin\.com/company/|linkedin\.com/in/|linkedin\.com/school/|linkedin\.com/login|"
+    r"/privacy|/terms|/dmca|/contact|/about|/login|/signin|/signup|/register|"
     r"/interview-questions|/resume-prompts|/resume-builder|/blog/|/salary-calculator|"
     r"/courses/|/mock-test|/pricing|/employer|mailto:|javascript:)",
     re.IGNORECASE,
@@ -355,9 +356,13 @@ class BiEncoderClassifier:
 
         classified: list[DOMCandidate] = []
         for idx, cand in enumerate(candidates):
-            best_idx = int(np.argmax(cos_sims[idx]))
+            full_url = f"{cand.url} {cand.url_path}"
+            if NOISE_URL_PATTERNS.search(full_url) or cand.region == "footer":
+                best_idx = 2  # noise
+            else:
+                best_idx = int(np.argmax(cos_sims[idx]))
             label = CLASS_LABELS[best_idx]
-            conf = float(probs[idx, best_idx])
+            conf = float(max(probs[idx, best_idx], 0.90 if best_idx == 2 and NOISE_URL_PATTERNS.search(full_url) else 0.0))
             updated = cand.model_copy(
                 update={
                     "predicted_label": label,

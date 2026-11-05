@@ -96,7 +96,9 @@ class JobScraperPipeline:
                     return None
                 async with sem:
                     try:
-                        html = await self.fetcher.fetch(cand.url, render_mode="auto")
+                        portal = resolve_portal_for_url(cand.url)
+                        rmode = portal.render if portal else "auto"
+                        html = await self.fetcher.fetch(cand.url, render_mode=rmode)
                         if not html:
                             return None
                         return extract_job_detail_from_html(

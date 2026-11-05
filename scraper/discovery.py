@@ -109,8 +109,34 @@ def discover_candidate_urls(
                                 _register(href)
                     except Exception as exc:
                         logger.debug("DDG query failed for %s: %s", q, exc)
+        except ImportError:
+            # Built-in httpx DuckDuckGo HTML fallback when `ddgs` package is not installed
+            import httpx
+            from bs4 import BeautifulSoup
+            from urllib.parse import parse_qs, unquote, urlparse
+
+            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+            for q in queries[:4]:
+                try:
+                    resp = httpx.get(
+                        f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",
+                        headers=headers,
+                        timeout=8.0,
+                    )
+                    if resp.status_code == 200:
+                        soup = BeautifulSoup(resp.text, "lxml")
+                        for a in soup.select("a.result__a"):
+                            raw_href = a.get("href") or ""
+                            if "uddg=" in raw_href:
+                                qs = parse_qs(urlparse(raw_href).query)
+                                if qs.get("uddg"):
+                                    raw_href = unquote(qs["uddg"][0])
+                            if raw_href.startswith("http"):
+                                _register(raw_href)
+                except Exception as exc:
+                    logger.debug("DDG HTML fallback failed for %s: %s", q, exc)
         except Exception as exc:
-            logger.warning("DDGS search unavailable (%s), relying on direct portal URLs", exc)
+            logger.debug("DDGS search unavailable (%s), relying on direct portal URLs", exc)
 
     for url, portal_id in build_direct_portal_urls(req):
         _register(url, portal_id)

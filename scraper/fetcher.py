@@ -119,22 +119,26 @@ class HybridFetcher:
             try:
                 return await self._fetch_playwright(url)
             except Exception as exc:
-                logger.warning("Playwright fetch failed for %s (%s), falling back to httpx", url, exc)
+                logger.debug("Playwright fetch unavailable for %s (%s), falling back to httpx", url, exc)
                 return await self._fetch_http(url)
 
         # render_mode == "auto"
+        http_html = ""
         try:
-            html = await self._fetch_http(url)
-            if not needs_js_rendering(html):
-                return html
+            http_html = await self._fetch_http(url)
+            if not needs_js_rendering(http_html):
+                return http_html
         except Exception as exc:
             logger.debug("HTTP auto-fetch failed for %s (%s), escalating to Playwright", url, exc)
 
         try:
             return await self._fetch_playwright(url)
+        except ImportError:
+            logger.debug("Playwright not installed; using HTTP response for %s", url)
+            return http_html
         except Exception as exc:
-            logger.warning("Playwright fallback failed for %s (%s)", url, exc)
-            return ""
+            logger.debug("Playwright fallback failed for %s (%s)", url, exc)
+            return http_html
 
     async def close(self) -> None:
         """Close underlying HTTP client and Playwright browser."""
