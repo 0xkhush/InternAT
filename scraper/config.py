@@ -44,7 +44,7 @@ TARGET_PORTALS: list[PortalConfig] = [
         id="hiredoor",
         name="Hiredoor",
         domain="hiredoor.in",
-        entry_url="https://hiredoor.in/",
+        entry_url="https://hiredoor.in/jobs/internships",
         render="always",
     ),
     PortalConfig(

@@ -51,6 +51,8 @@ def build_direct_portal_urls(req: JobSearchRequirement) -> list[tuple[str, str]]
     if req.target_batches:
         batch = req.target_batches[0]
         _add(f"https://thejobcompany.co.in/job-category/batch/{batch}/", "thejobcompany")
+    if req.job_type == "internship":
+        _add("https://careersat.tech/jobs/type/internship", "careersat")
     _add(f"https://www.linkedin.com/jobs/search/?keywords={kw_encoded}&location={loc_encoded}", "linkedin")
     _add(f"https://internshala.com/internships/{role_slug}-internship/", "internshala")
     _add(f"https://in.indeed.com/jobs?q={kw_encoded}&l={loc_encoded}", "indeed")

@@ -224,10 +224,11 @@ func ExtractDOMCandidates(rawHTML, baseURL, sourcePortal string) []DOMCandidate 
 		}
 
 		parent := stack[len(stack)-1]
+		isNextStreamingDiv := tagName == "div" && (strings.Contains(attrs, `id="S:`) || strings.Contains(attrs, `id="B:`))
 		node := &domNode{
 			tag:    tagName,
 			attrs:  attrs,
-			hidden: parent.hidden || hiddenAttrRe.MatchString(attrs),
+			hidden: parent.hidden || (!isNextStreamingDiv && hiddenAttrRe.MatchString(attrs)),
 			parent: parent,
 		}
 		if tagName == "a" {

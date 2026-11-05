@@ -171,6 +171,42 @@ class HybridFetcher:
         if hasattr(self, "_interndoor_cache") and url in self._interndoor_cache:
             return self._interndoor_cache[url]
 
+        # Fast-path for Unstop (`unstop.com`): its Angular SPA shell only renders 1 link without JS,
+        # but its public REST API `/api/public/opportunity/search-result` returns rich structured internships!
+        if "unstop.com" in url and "/internships/" not in url and "/jobs/" not in url:
+            try:
+                client = await self._get_http_client()
+                resp = await client.get(
+                    "https://unstop.com/api/public/opportunity/search-result?opportunity=internships&page=1&per_page=25&oppstatus=open"
+                )
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    items = (payload.get("data") or {}).get("data") or []
+                    if not hasattr(self, "_interndoor_cache"):
+                        self._interndoor_cache = {}
+                    cards_html = []
+                    for item in items:
+                        title = str(item.get("title") or "")
+                        org = item.get("organisation") or {}
+                        company = str(org.get("name") or "Unstop Partner")
+                        pub_url = str(item.get("public_url") or "").lstrip("/")
+                        if not pub_url:
+                            continue
+                        href = f"https://unstop.com/{pub_url}"
+                        locs = ", ".join(str(x) for x in (item.get("locations") or ["India"]) if x) or "India"
+                        filters = item.get("filters") or []
+                        elig = ", ".join(str(f.get("name") or "") for f in filters if isinstance(f, dict))
+                        cards_html.append(
+                            f'<article class="unstop-card">'
+                            f'<h2><a href="{href}">{company} - {title}</a></h2>'
+                            f'<p>{company} | {locs} | Internship | {elig}</p>'
+                            f'</article>'
+                        )
+                    if cards_html:
+                        return f"<html><body><main>{''.join(cards_html)}</main></body></html>"
+            except Exception as exc:
+                logger.debug("Unstop JSON feed synthesis failed (%s), falling back to HTML", exc)
+
         if render_mode == "always":
             try:
                 return await self._fetch_playwright(url)

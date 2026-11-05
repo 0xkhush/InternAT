@@ -150,8 +150,14 @@ def extract_dom_candidates(
     for tag_name in STRIP_TAGS:
         for t in soup.find_all(tag_name):
             t.decompose()
-    for hidden in soup.select("[hidden], [aria-hidden='true']"):
+    # Note: Do NOT decompose `<div hidden id="S:...">` because Next.js 14/15 App Router RSC streaming
+    # places all server-rendered page content inside `<div hidden id="S:0..N">` before hydration!
+    for hidden in soup.select("[aria-hidden='true']"):
         hidden.decompose()
+    for hidden in soup.select("[hidden]"):
+        hid_id = str(hidden.get("id") or "")
+        if not hid_id.startswith(("S:", "B:")):
+            hidden.decompose()
 
     dedup_by_url: dict[str, DOMCandidate] = {}
 

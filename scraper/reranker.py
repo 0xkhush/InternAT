@@ -48,8 +48,15 @@ def passes_card_context_prefilter(candidate: DOMCandidate, req: JobSearchRequire
 
     # 3. If user specified target batches (e.g., ["2028"]) and the card explicitly lists batch years,
     # reject if none of the user's target batches appear in the card's mentioned batch years.
+    # Ignore "Recruitment 2026" / "Off Campus Drive 2026" / "Internship 2026" posting-year phrases on the card.
     if req.target_batches:
-        mentioned_years = set(BATCH_YEARS_RE.findall(combined))
+        cleaned_for_batch = re.sub(
+            r"\b(?:recruitment|drive|hiring|off\s*campus|internship|internships)\s+2026\b",
+            "",
+            combined,
+            flags=re.IGNORECASE,
+        )
+        mentioned_years = set(BATCH_YEARS_RE.findall(cleaned_for_batch))
         if mentioned_years:
             target_set = set(req.target_batches)
             if mentioned_years.isdisjoint(target_set):

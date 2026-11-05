@@ -21,7 +21,7 @@ func GetTargetPortals() []PortalConfig {
 	return []PortalConfig{
 		{ID: "thejobcompany", Name: "The Job Company", Domain: "thejobcompany.co.in", EntryURL: "https://thejobcompany.co.in/", Render: "auto"},
 		{ID: "careersat", Name: "CareersAt.Tech", Domain: "careersat.tech", EntryURL: "https://careersat.tech/jobs", Render: "always"},
-		{ID: "hiredoor", Name: "Hiredoor", Domain: "hiredoor.in", EntryURL: "https://hiredoor.in/", Render: "always"},
+		{ID: "hiredoor", Name: "Hiredoor", Domain: "hiredoor.in", EntryURL: "https://hiredoor.in/jobs/internships", Render: "always"},
 		{ID: "freshersworld", Name: "Freshersworld", Domain: "freshersworld.com", EntryURL: "https://www.freshersworld.com/jobs/category/internship-job-vacancies", Render: "always"},
 		{ID: "offcampus", Name: "OffCampusJobs4u", Domain: "offcampusjobs4u.com", EntryURL: "https://offcampusjobs4u.com/", Render: "auto"},
 		{ID: "talentbattle", Name: "Talent Battle", Domain: "talentbattle.in", EntryURL: "https://talentbattle.in/", Render: "auto"},
