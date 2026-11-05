@@ -47,7 +47,7 @@ async def run_interactive_cli(
     queries = build_16_site_search_queries(req)
     print(f"\nAgent > Locked in search profile: {req.to_search_summary()}")
     print(f"Agent > Generated {len(queries)} targeted 16-portal search queries:")
-    for idx, q in enumerate(queries[:4], 1):
+    for idx, q in enumerate(queries, 1):
         print(f"  [{idx}] {q}")
 
     pipeline = JobScraperPipeline(settings)

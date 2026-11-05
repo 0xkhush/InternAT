@@ -13,27 +13,16 @@ logger = logging.getLogger(__name__)
 
 
 def build_16_site_search_queries(req: JobSearchRequirement) -> list[str]:
-    """Generate targeted DuckDuckGo search queries explicitly covering all 16 job portals."""
-    role_term = req.role_keywords[0] if req.role_keywords else "Software Engineer"
+    """Generate 16 clean per-portal DuckDuckGo search queries (no quotes on batch/location so DDG's native site: filter triggers)."""
+    role_term = req.role_keywords[0] if req.role_keywords else "software engineering"
     type_term = "internship" if req.job_type == "internship" else "jobs"
-    batch_term = f'"{req.target_batches[0]}"' if req.target_batches else "fresher"
+    batch_term = req.target_batches[0] if req.target_batches else "fresher"
     loc_terms = [c for c in req.locations if c.lower() != "india"][:2]
-    loc_str = " OR ".join(f'"{c}"' for c in loc_terms) if loc_terms else "India"
+    loc_str = f"({' OR '.join(loc_terms)})" if loc_terms else "(India)"
 
     queries: list[str] = []
-
-    # 1. Group the 16 portals into 4 batches of 4 `site:` filters so every portal domain is searched
-    for i in range(0, len(TARGET_PORTALS), 4):
-        group = TARGET_PORTALS[i : i + 4]
-        site_clause = " OR ".join(f"site:{p.domain}" for p in group)
-        q = f"({site_clause}) ({role_term} OR SDE) {type_term} {batch_term} ({loc_str})".strip()
-        queries.append(q)
-
-    # 2. Portal-name keyword queries (catches indexed category/post URLs by portal brand name)
-    for i in range(0, len(TARGET_PORTALS), 4):
-        group = TARGET_PORTALS[i : i + 4]
-        names_clause = " OR ".join(f'"{p.id}"' for p in group)
-        q = f"({names_clause}) {role_term} {type_term} {batch_term} {loc_str}".strip()
+    for portal in TARGET_PORTALS:
+        q = f"site:{portal.domain} ({role_term} OR SDE) {type_term} {batch_term} {loc_str}".strip()
         queries.append(q)
 
     return queries
@@ -116,7 +105,7 @@ def discover_candidate_urls(
             from urllib.parse import parse_qs, unquote, urlparse
 
             headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-            for q in queries[:4]:
+            for q in queries:
                 try:
                     resp = httpx.get(
                         f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",

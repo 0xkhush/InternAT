@@ -65,10 +65,10 @@ func ParseQueryHeuristic(query string) JobSearchRequirement {
 	}
 }
 
-// Build16SiteSearchQueries constructs DuckDuckGo search queries explicitly covering all 16 job portals.
+// Build16SiteSearchQueries constructs 16 per-portal DuckDuckGo search queries without quotes around batch/location.
 func Build16SiteSearchQueries(req JobSearchRequirement) []string {
 	portals := GetTargetPortals()
-	roleTerm := "Software Engineer"
+	roleTerm := "software engineering"
 	if len(req.RoleKeywords) > 0 {
 		roleTerm = req.RoleKeywords[0]
 	}
@@ -78,27 +78,17 @@ func Build16SiteSearchQueries(req JobSearchRequirement) []string {
 	}
 	batchTerm := "fresher"
 	if len(req.TargetBatches) > 0 {
-		batchTerm = fmt.Sprintf(`"%s"`, req.TargetBatches[0])
+		batchTerm = req.TargetBatches[0]
 	}
-	locTerm := "India"
+	locTerm := "(India)"
 	if len(req.Locations) > 0 {
-		locTerm = req.Locations[0]
+		locTerm = fmt.Sprintf("(%s)", strings.Join(req.Locations, " OR "))
 	}
 
-	var queries []string
-	for i := 0; i < len(portals); i += 4 {
-		end := i + 4
-		if end > len(portals) {
-			end = len(portals)
-		}
-		var siteParts []string
-		var idParts []string
-		for _, p := range portals[i:end] {
-			siteParts = append(siteParts, "site:"+p.Domain)
-			idParts = append(idParts, fmt.Sprintf(`"%s"`, p.ID))
-		}
-		queries = append(queries, fmt.Sprintf("(%s) (%s OR SDE) %s %s %s", strings.Join(siteParts, " OR "), roleTerm, typeTerm, batchTerm, locTerm))
-		queries = append(queries, fmt.Sprintf("(%s) %s %s %s %s", strings.Join(idParts, " OR "), roleTerm, typeTerm, batchTerm, locTerm))
+	queries := make([]string, 0, len(portals))
+	for _, p := range portals {
+		q := fmt.Sprintf("site:%s (%s OR SDE) %s %s %s", p.Domain, roleTerm, typeTerm, batchTerm, locTerm)
+		queries = append(queries, q)
 	}
 	return queries
 }
