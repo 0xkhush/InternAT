@@ -41,8 +41,8 @@ const sampleCareersAtHTML = `
 
 func TestGoOuterFirstDOMExtractorAnd16Sites(t *testing.T) {
 	portals := GetTargetPortals()
-	if len(portals) != 16 {
-		t.Fatalf("expected 16 target portals, got %d", len(portals))
+	if len(portals) != 17 {
+		t.Fatalf("expected 17 target portals, got %d", len(portals))
 	}
 
 	candidates := ExtractDOMCandidates(sampleCareersAtHTML, "https://careersat.tech/jobs", "careersat")

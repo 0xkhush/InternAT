@@ -35,6 +35,7 @@ func GetTargetPortals() []PortalConfig {
 		{ID: "linkedin", Name: "LinkedIn Jobs", Domain: "linkedin.com", EntryURL: "https://www.linkedin.com/jobs/search/", Render: "never"},
 		{ID: "cuvette", Name: "Cuvette", Domain: "cuvette.tech", EntryURL: "https://cuvette.tech/", Render: "auto"},
 		{ID: "prosple", Name: "Prosple India", Domain: "in.prosple.com", EntryURL: "https://in.prosple.com/", Render: "auto"},
+		{ID: "interndoor", Name: "InternDoor", Domain: "interndoor.com", EntryURL: "https://interndoor.com/", Render: "auto"},
 	}
 }
 

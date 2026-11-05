@@ -5,9 +5,9 @@ from scraper.dedup import normalize_url, SeenJobsStore
 
 
 def test_16_target_portals_and_glm_settings():
-    assert len(TARGET_PORTALS) == 16
+    assert len(TARGET_PORTALS) == 17
     ids = {p.id for p in TARGET_PORTALS}
-    assert {"thejobcompany", "careersat", "internshala", "unstop", "linkedin", "cuvette", "prosple"}.issubset(ids)
+    assert {"thejobcompany", "careersat", "internshala", "unstop", "linkedin", "cuvette", "prosple", "interndoor"}.issubset(ids)
     settings = Settings()
     assert settings.glm_model == "glm-5.3-flash"
 

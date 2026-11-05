@@ -138,6 +138,13 @@ TARGET_PORTALS: list[PortalConfig] = [
         entry_url="https://in.prosple.com/",
         render="auto",
     ),
+    PortalConfig(
+        id="interndoor",
+        name="InternDoor",
+        domain="interndoor.com",
+        entry_url="https://interndoor.com/",
+        render="auto",
+    ),
 ]
 
 PORTAL_BY_ID: dict[str, PortalConfig] = {p.id: p for p in TARGET_PORTALS}
