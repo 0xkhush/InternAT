@@ -35,7 +35,7 @@ class JobScraperPipeline:
     async def run(
         self,
         req: JobSearchRequirement,
-        max_listing_pages: int = 20,
+        max_listing_pages: int = 32,
         max_detail_pages: int = 20,
         enable_ddg: bool = True,
     ) -> dict[str, Any]:

@@ -83,6 +83,11 @@ def discover_candidate_urls(
         seen_in_batch.add(norm)
         discovered.append((norm, portal_id))
 
+    # 1. Always register high-yield direct portal search & entry URLs FIRST so listing_targets[:max_listing_pages]
+    # never starves direct portals behind individual DuckDuckGo results.
+    for url, portal_id in build_direct_portal_urls(req):
+        _register(url, portal_id)
+
     if enable_ddg:
         queries = build_16_site_search_queries(req)
         try:
@@ -110,11 +115,11 @@ def discover_candidate_urls(
                     resp = httpx.get(
                         f"https://html.duckduckgo.com/html/?q={quote_plus(q)}",
                         headers=headers,
-                        timeout=8.0,
+                        timeout=4.0,
                     )
                     if resp.status_code == 200:
                         soup = BeautifulSoup(resp.text, "lxml")
-                        for a in soup.select("a.result__a"):
+                        for a in soup.select("a.result__a")[:max_ddg_results_per_query]:
                             raw_href = a.get("href") or ""
                             if "uddg=" in raw_href:
                                 qs = parse_qs(urlparse(raw_href).query)
@@ -126,9 +131,6 @@ def discover_candidate_urls(
                     logger.debug("DDG HTML fallback failed for %s: %s", q, exc)
         except Exception as exc:
             logger.debug("DDGS search unavailable (%s), relying on direct portal URLs", exc)
-
-    for url, portal_id in build_direct_portal_urls(req):
-        _register(url, portal_id)
 
     return discovered
 
