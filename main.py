@@ -12,12 +12,16 @@ from scraper.discovery import build_16_site_search_queries
 from scraper.pipeline import JobScraperPipeline
 
 
-async def run_interactive_cli(initial_query: str | None = None, skip_clarification: bool = False) -> None:
+async def run_interactive_cli(
+    initial_query: str | None = None,
+    skip_clarification: bool = False,
+    top_k: int = 15,
+) -> None:
     settings = Settings()
     agent = IntakeAgent(settings)
 
     print("=" * 72)
-    print("  InterAT 2.0 — ML-Powered Job & Internship Scraper Agent (GLM-5.3-flash)")
+    print("  InterAT 2.0 — AI-Powered Job & Internship Agent (GLM-5.3-flash)")
     print("  Stage 1: Bi-Encoder (all-MiniLM-L6-v2 + Contrastive Metric Projection)")
     print("  Stage 2: Cross-Encoder Re-Ranker (ms-marco-MiniLM-L-6-v2)")
     print("=" * 72)
@@ -43,8 +47,8 @@ async def run_interactive_cli(initial_query: str | None = None, skip_clarificati
         print(f"  [{idx}] {q}")
 
     pipeline = JobScraperPipeline(settings)
-    print("\nAgent > Running hybrid discovery, Bi-Encoder classification & Cross-Encoder re-ranking...")
-    result = await pipeline.run(req)
+    print(f"\nAgent > Running hybrid discovery, Bi-Encoder classification & Cross-Encoder re-ranking (top_k={top_k})...")
+    result = await pipeline.run(req, max_detail_pages=top_k)
 
     stats = result["removed_noise_stats"]
     print("\n" + "-" * 72)
@@ -69,8 +73,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="InterAT 2.0 Conversational Job Scraper CLI")
     parser.add_argument("--query", type=str, default=None, help="Initial job search query")
     parser.add_argument("--yes", action="store_true", help="Skip interactive clarification prompt")
+    parser.add_argument("--top-k", type=int, default=15, help="Top-K job detail pages to keep after Cross-Encoder re-ranking (default: 15)")
     args = parser.parse_args()
-    asyncio.run(run_interactive_cli(initial_query=args.query, skip_clarification=args.yes))
+    asyncio.run(run_interactive_cli(initial_query=args.query, skip_clarification=args.yes, top_k=args.top_k))
 
 
 if __name__ == "__main__":

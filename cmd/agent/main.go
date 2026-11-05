@@ -22,6 +22,7 @@ func defaultPythonBin() string {
 func main() {
 	queryFlag := flag.String("query", "", "Initial job search query (e.g. '2028 internship software engineering india')")
 	autoYes := flag.Bool("yes", false, "Skip interactive clarification prompt")
+	topKFlag := flag.Int("top-k", 15, "Top-K job detail pages to keep after Cross-Encoder re-ranking")
 	pythonBin := flag.String("python", defaultPythonBin(), "Python binary for Bi-Encoder / Cross-Encoder ML bridge")
 	flag.Parse()
 
@@ -116,8 +117,8 @@ func main() {
 		return
 	}
 
-	fmt.Printf("[Stage 2b: Python ML Bridge] Sending %d DOM candidates to Bi-Encoder + Cross-Encoder...\n", len(allCandidates))
-	mlResp, err := scraper.CallPythonMLBridge(*pythonBin, req, allCandidates, 15)
+	fmt.Printf("[Stage 2b: Python ML Bridge] Sending %d DOM candidates to Bi-Encoder + Cross-Encoder (top_k=%d)...\n", len(allCandidates), *topKFlag)
+	mlResp, err := scraper.CallPythonMLBridge(*pythonBin, req, allCandidates, *topKFlag)
 	if err != nil {
 		fmt.Printf("ML Bridge error: %v\n", err)
 		return
