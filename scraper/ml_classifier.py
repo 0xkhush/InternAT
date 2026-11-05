@@ -65,6 +65,10 @@ SEED_PROTOTYPES: dict[str, list[str]] = {
         "[REGION] main | [SIBLINGS] 7 | [TEXT] View All Engineering Jobs | [CONTEXT] Explore categories: Engineering MBA Design Product | [URL] /internship?category=engineering",
         "[REGION] main | [SIBLINGS] 6 | [TEXT] Remote Software Internships | [CONTEXT] Location filter Remote Hybrid Onsite India | [URL] /jobs?location=remote&type=internship",
         "[REGION] main | [SIBLINGS] 5 | [TEXT] 3 | [CONTEXT] Pagination 1 2 3 4 5 Next | [URL] /internships/page-3",
+        "[REGION] main | [SIBLINGS] 12 | [TEXT] 3 3GPP Jobs in Bangalore (Bengaluru) | [CONTEXT] 3GPP Job openings in Bangalore (Bengaluru) Cutshort directory | [URL] /jobs/3gpp-jobs-in-bangalore-bengaluru",
+        "[REGION] main | [SIBLINGS] 12 | [TEXT] 8 3D CAD Jobs in Mumbai | [CONTEXT] 3D CAD Job openings in Mumbai Cutshort skill directory | [URL] /jobs/3d-cad-jobs-in-mumbai",
+        "[REGION] main | [SIBLINGS] 12 | [TEXT] 3 2D computer graphics Jobs in Bangalore | [CONTEXT] 2D computer graphics Job openings in Bangalore | [URL] /jobs/2d-computer-graphics-jobs-in-bangalore-bengaluru",
+        "[REGION] main | [SIBLINGS] 10 | [TEXT] Rubrik Careers — Hiring Freshers | [CONTEXT] Companies directory hiring freshers on CareersAt.Tech | [URL] /companies/rubrik",
     ],
     "noise": [
         "[REGION] main | [SIBLINGS] 1 | [TEXT] Join channel | [CONTEXT] WhatsApp channel 52,000+ followers Verified fresher jobs, internships and study resources. Free, no spam. | [URL] /channel/0029VaUJgMW2kNFx7ABlpx2y",
@@ -87,12 +91,15 @@ SEED_PROTOTYPES: dict[str, list[str]] = {
         "[REGION] main | [SIBLINGS] 1 | [TEXT] Subscribe to Newsletter | [CONTEXT] Enter your email to get weekly newsletter and career tips | [URL] /newsletter/subscribe",
         "[REGION] footer | [SIBLINGS] 8 | [TEXT] DMCA Policy | [CONTEXT] Intellectual property and copyright removal requests | [URL] /dmca",
         "[REGION] header | [SIBLINGS] 6 | [TEXT] Home | [CONTEXT] Main navigation bar Home Blog Courses Login | [URL] /",
+        "[REGION] nav | [SIBLINGS] 4 | [TEXT] Discover online degrees | [CONTEXT] Internshala Trainings Certification Courses Placement Guarantee | [URL] https://trainings.internshala.com/?utm_source=is_web_internshala-menu-dropdown1",
+        "[REGION] header | [SIBLINGS] 3 | [TEXT] Hasjob The Hasgeek Job Board | [CONTEXT] Post a job Search jobs Login | [URL] https://hasjob.co/",
     ],
 }
 
 NOISE_URL_PATTERNS = re.compile(
     r"(whatsapp\.com|wa\.me|t\.me|telegram\.me|instagram\.com|facebook\.com|twitter\.com|x\.com|"
     r"youtube\.com|linkedin\.com/company/|linkedin\.com/in/|linkedin\.com/school/|linkedin\.com/login|"
+    r"trainings\.internshala\.com|careersat\.tech/companies/|cutshort\.io/companies/|"
     r"/privacy|/terms|/dmca|/contact|/about|/login|/signin|/signup|/register|"
     r"/interview-questions|/resume-prompts|/resume-builder|/blog/|/salary-calculator|"
     r"/courses/|/mock-test|/pricing|/employer|mailto:|javascript:)",
@@ -100,12 +107,13 @@ NOISE_URL_PATTERNS = re.compile(
 )
 
 PAGINATION_URL_PATTERNS = re.compile(
-    r"([?&]page=\d+|/page/\d+|/page-\d+|/job-category/|/category/|/tag/|/batch/\d{4}|[?&]start=\d+)",
+    r"([?&]page=\d+|/page/\d+|/page-\d+|/job-category/|/category/|/tag/|/batch/\d{4}|[?&]start=\d+|"
+    r"cutshort\.io/jobs/|-jobs-in-[a-z-]+$)",
     re.IGNORECASE,
 )
 
 PAGINATION_TEXT_PATTERNS = re.compile(
-    r"^(next|prev|previous|page\s*\d+|\d+|load\s*more|older\s*posts|next\s*page.*|.*batch\s*jobs)$",
+    r"^(next|prev|previous|page\s*\d+|\d+|load\s*more|older\s*posts|next\s*page.*|.*batch\s*jobs|\d+\s+.+\s+jobs\s+in\s+.+)$",
     re.IGNORECASE,
 )
 
@@ -357,8 +365,10 @@ class BiEncoderClassifier:
         classified: list[DOMCandidate] = []
         for idx, cand in enumerate(candidates):
             full_url = f"{cand.url} {cand.url_path}"
-            if NOISE_URL_PATTERNS.search(full_url) or cand.region == "footer":
+            if NOISE_URL_PATTERNS.search(full_url) or cand.region in ("footer", "nav", "header"):
                 best_idx = 2  # noise
+            elif PAGINATION_URL_PATTERNS.search(full_url) or PAGINATION_TEXT_PATTERNS.match(cand.text.strip()):
+                best_idx = 1  # pagination_or_filter
             else:
                 best_idx = int(np.argmax(cos_sims[idx]))
             label = CLASS_LABELS[best_idx]

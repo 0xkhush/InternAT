@@ -60,7 +60,14 @@ INVALID_GENERIC_TITLES = {
     "terms of service",
     "contact us",
     "about us",
+    "discover online degrees",
+    "hasjob the hasgeek job board",
 }
+
+DIRECTORY_TITLE_RE = re.compile(
+    r"^\d+\s+.+\s+jobs\s+in\s+",
+    re.IGNORECASE,
+)
 
 
 def clean_text_block(text: str) -> str:
@@ -133,6 +140,8 @@ def normalize_job_record(record: JobRecord) -> Optional[JobRecord]:
     """Layer 4 deterministic validator and field normalizer for JobRecord."""
     clean_title = re.sub(r"\s+", " ", html.unescape(record.title or "")).strip(" -–|")
     if clean_title.lower() in INVALID_GENERIC_TITLES or len(clean_title) < 3:
+        return None
+    if DIRECTORY_TITLE_RE.search(clean_title):
         return None
     if PROMO_LINE_RE.search(clean_title):
         return None

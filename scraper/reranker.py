@@ -13,21 +13,40 @@ HIGH_EXPERIENCE_RE = re.compile(
     r"\b([3-9]|1\d)\s*(?:[-–to]+\s*\d+\s*|\+\s*)(?:yrs?|years?)(?:\s+of)?(?:\s+exp|\s+experience)?\b",
     re.IGNORECASE,
 )
+SENIOR_TITLE_RE = re.compile(
+    r"\b(lead\s+engineer|engineering\s+manager|principal\s+engineer|staff\s+engineer|director|vp\s+of|architect|head\s+of|sr\.?\s+engineer|senior\s+software)\b",
+    re.IGNORECASE,
+)
+NON_TECH_ROLE_RE = re.compile(
+    r"\b(interior\s+design|sales\s+and\s+marketing|digital\s+marketing|content\s+marketing|bde\s+intern|business\s+development\s+executive|"
+    r"pr\s+media|human\s+resources|hr\s+intern|graphic\s+design|video\s+editor|telecalling|campus\s+ambassador|social\s+media\s+marketing|"
+    r"discover\s+online\s+degrees|3d\s+cad)\b",
+    re.IGNORECASE,
+)
 BATCH_YEARS_RE = re.compile(r"\b(202[0-9])\b")
 
 
 def passes_card_context_prefilter(candidate: DOMCandidate, req: JobSearchRequirement) -> bool:
     """Fast rule/regex pre-filter on card context before running Cross-Encoder or fetching detail pages."""
     combined = f"{candidate.text} {candidate.context}".lower()
+    title_lower = candidate.text.lower()
 
-    # 1. If user is searching for an internship or fresher role, reject cards explicitly requiring 3+ years experience
+    # 1. If user is searching for an internship or fresher role, reject cards explicitly requiring 3+ years experience or senior management titles
     is_fresher_or_intern = req.job_type == "internship" or any(
         b in ("2026", "2027", "2028", "2029") for b in req.target_batches
     )
-    if is_fresher_or_intern and HIGH_EXPERIENCE_RE.search(combined):
+    if is_fresher_or_intern and (HIGH_EXPERIENCE_RE.search(combined) or SENIOR_TITLE_RE.search(title_lower)):
         return False
 
-    # 2. If user specified target batches (e.g., ["2028"]) and the card explicitly lists batch years,
+    # 2. If user is searching for software/engineering/tech roles, reject explicit non-tech roles (interior design, BDE, marketing, PR media, etc.)
+    is_tech_search = any(
+        kw in " ".join(req.role_keywords).lower()
+        for kw in ("software", "sde", "developer", "engineer", "backend", "frontend", "full stack", "data", "ai", "ml")
+    )
+    if is_tech_search and NON_TECH_ROLE_RE.search(title_lower):
+        return False
+
+    # 3. If user specified target batches (e.g., ["2028"]) and the card explicitly lists batch years,
     # reject if none of the user's target batches appear in the card's mentioned batch years.
     if req.target_batches:
         mentioned_years = set(BATCH_YEARS_RE.findall(combined))

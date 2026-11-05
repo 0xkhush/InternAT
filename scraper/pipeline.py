@@ -136,13 +136,26 @@ class JobScraperPipeline:
             raw_details = await asyncio.gather(*[_fetch_detail(c) for c in top_job_candidates])
             valid_details = [d for d in raw_details if d is not None]
 
-            # Stage 4: Batched GLM-5.3-flash structured extraction + strict batch filter + deduplication
+            # Stage 4: Batched GLM-5.3-flash structured extraction + strict batch/role filter + deduplication
+            from scraper.reranker import NON_TECH_ROLE_RE, SENIOR_TITLE_RE
+
             extracted_records = self.job_extractor.extract_batch(valid_details, req)
             final_records: list[JobRecord] = []
             target_batch_set = set(req.target_batches)
+            is_fresher_or_intern = req.job_type == "internship" or any(
+                b in ("2026", "2027", "2028", "2029") for b in req.target_batches
+            )
+            is_tech_search = any(
+                kw in " ".join(req.role_keywords).lower()
+                for kw in ("software", "sde", "developer", "engineer", "backend", "frontend", "full stack", "data", "ai", "ml")
+            )
             for rec in extracted_records:
                 if len(final_records) >= max_detail_pages:
                     break
+                if is_fresher_or_intern and SENIOR_TITLE_RE.search(rec.title):
+                    continue
+                if is_tech_search and NON_TECH_ROLE_RE.search(rec.title):
+                    continue
                 # If the user asked for specific batches (e.g. 2028) and the job explicitly lists batch years,
                 # drop jobs that only allow other batches (e.g. 2026/2027 only)
                 rec_years = {b for b in rec.batch_eligible if b.isdigit()}

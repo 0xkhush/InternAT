@@ -78,13 +78,30 @@ async def run_interactive_cli(
     display_jobs = list(result["job_listings"][:top_k])
     if len(display_jobs) < top_k and settings.output_jobs_path.exists():
         try:
+            from scraper.cleaner import DIRECTORY_TITLE_RE, INVALID_GENERIC_TITLES
+            from scraper.reranker import NON_TECH_ROLE_RE, SENIOR_TITLE_RE
+
             saved_all = json.loads(settings.output_jobs_path.read_text(encoding="utf-8"))
             seen_ids = {j.get("job_id") for j in display_jobs}
             target_batches = set(req.target_batches)
-            for j in reversed(saved_all):
+            is_fresher_or_intern = req.job_type == "internship" or any(
+                b in ("2026", "2027", "2028", "2029") for b in req.target_batches
+            )
+            is_tech_search = any(
+                kw in " ".join(req.role_keywords).lower()
+                for kw in ("software", "sde", "developer", "engineer", "backend", "frontend", "full stack", "data", "ai", "ml")
+            )
+            for j in saved_all:
                 if len(display_jobs) >= top_k:
                     break
                 if j.get("job_id") in seen_ids:
+                    continue
+                j_title = str(j.get("title") or "").strip()
+                if j_title.lower() in INVALID_GENERIC_TITLES or DIRECTORY_TITLE_RE.search(j_title):
+                    continue
+                if is_fresher_or_intern and SENIOR_TITLE_RE.search(j_title):
+                    continue
+                if is_tech_search and NON_TECH_ROLE_RE.search(j_title):
                     continue
                 j_batches = {b for b in j.get("batch_eligible", []) if str(b).isdigit()}
                 if target_batches and j_batches and j_batches.isdisjoint(target_batches):

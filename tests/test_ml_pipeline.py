@@ -116,10 +116,11 @@ def test_context_prefilter_and_cross_encoder_reranker():
     )
 
     assert passes_card_context_prefilter(senior_job, req) is False
+    assert passes_card_context_prefilter(unrelated_intern, req) is False
     assert passes_card_context_prefilter(matching_intern, req) is True
 
     reranker = CrossEncoderReranker()
-    ranked = reranker.rerank([unrelated_intern, matching_intern], req, top_k=2)
+    ranked = reranker.rerank([unrelated_intern, matching_intern], req, top_k=2, apply_prefilter=False)
     assert ranked[0].url == matching_intern.url
     assert ranked[0].relevance_score > ranked[1].relevance_score
 
