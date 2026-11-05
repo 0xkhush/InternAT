@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interat-ml-job-scraper"
+version = "0.1.0"
+description = "ML-Powered Job & Internship Web Scraper (Bi-Encoder Vector Space + Cross-Encoder Re-Ranker + GLM-5.3-flash CLI Agent)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0",
+    "playwright>=1.44.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=5.0.0",
+    "trafilatura>=1.10.0",
+    "ddgs>=6.0.0",
+    "sentence-transformers>=3.0.0",
+    "torch>=2.1.0",
+    "numpy>=1.26.0",
+    "scikit-learn>=1.4.0",
+    "pydantic>=2.6.0",
+    "python-dotenv>=1.0.0",
+    "openai>=1.30.0",
+    "matplotlib>=3.8.0",
+    "plotly>=5.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
