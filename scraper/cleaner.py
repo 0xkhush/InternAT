@@ -162,3 +162,4 @@ def normalize_job_record(record: JobRecord) -> Optional[JobRecord]:
         }
     )
     return updated
+

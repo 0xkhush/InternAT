@@ -76,9 +76,13 @@ def train_and_save(scrape_live: bool = False) -> dict:
     settings = Settings()
     clf = BiEncoderClassifier(settings)
     metrics = clf.fit_classifier_head(texts, labels)
-    print(f"[train_classifier] Trained on {metrics['num_samples']} samples | Accuracy: {metrics['train_accuracy']*100:.1f}%")
-    print(f"[train_classifier] Saved model -> {metrics['model_path']}")
-    print(f"[train_classifier] Saved centroids -> {metrics['centroids_path']}")
+    print(
+        f"[train_classifier] Contrastive Pair + Triplet Training: {metrics['num_samples']} samples | "
+        f"{metrics.get('num_pairs', 0)} pairs | {metrics.get('num_triplets', 0)} triplets | "
+        f"Centroid Cosine Accuracy: {metrics['train_accuracy']*100:.1f}%"
+    )
+    print(f"[train_classifier] Saved ContrastiveProjectionNet -> {metrics['model_path']}")
+    print(f"[train_classifier] Saved 3 Class Centroids -> {metrics['centroids_path']}")
     return metrics
 
 

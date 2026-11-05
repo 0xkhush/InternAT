@@ -143,3 +143,4 @@ class HybridFetcher:
         if self._playwright is not None:
             await self._playwright.stop()
             self._playwright = None
+

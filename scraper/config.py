@@ -184,3 +184,4 @@ class Settings(BaseModel):
     centroids_path: Path = Field(
         default_factory=lambda: PROJECT_ROOT / "models" / "centroids.npy"
     )
+

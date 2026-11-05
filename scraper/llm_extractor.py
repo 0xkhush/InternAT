@@ -283,3 +283,4 @@ class StructuredJobExtractor:
                     records.append(rec)
 
         return records
+

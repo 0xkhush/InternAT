@@ -201,3 +201,4 @@ def extract_dom_candidates(
                 dedup_by_url[norm_url] = candidate
 
     return list(dedup_by_url.values())
+

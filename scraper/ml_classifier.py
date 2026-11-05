@@ -1,14 +1,16 @@
-"""Stage 1 ML Layer: Bi-Encoder Vector Space Classifier with Contrastive Metric Projection."""
+"""Stage 1 ML Layer: Bi-Encoder with PyTorch Contrastive Pair / Triplet Fine-Tuning & Centroid Cosine Classification."""
 
 from __future__ import annotations
 
 import logging
-import pickle
 import re
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from scraper.config import Settings
 from scraper.schemas import DOMCandidate
@@ -165,8 +167,71 @@ def candidate_from_feature_string(feat_str: str, label: str | None = None) -> DO
     )
 
 
+class ContrastiveProjectionNet(nn.Module):
+    """PyTorch Metric Projection Network trained with Contrastive Pair + Triplet Margin Loss.
+
+    Takes `[384-d MiniLM vector || 11-d DOM structural features]` (`395-d`) and projects it
+    into a L2-normalized `384-d` Contrastive Vector Space where same-class candidates collapse
+    tightly around their class centroid and hard negatives are pushed beyond margin.
+    """
+
+    def __init__(self, in_dim: int = 395, hidden_dim: int = 256, out_dim: int = 384) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(in_dim, hidden_dim)
+        self.ln1 = nn.LayerNorm(hidden_dim)
+        self.act = nn.GELU()
+        self.fc2 = nn.Linear(hidden_dim, out_dim)
+        self.residual = nn.Linear(in_dim, out_dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.act(self.ln1(self.fc1(x)))
+        out = self.fc2(h) + 0.5 * self.residual(x)
+        return F.normalize(out, p=2, dim=-1)
+
+
+def _build_contrastive_pairs_and_triplets(
+    X: torch.Tensor,
+    y: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Build all Positive Pairs, Negative Pairs, and Hard/Semi-Hard Triplets `(anchor, pos, neg)`."""
+    n = X.shape[0]
+    anchors_p, others_p, pair_targets = [], [], []
+    anchors_t, pos_t, neg_t = [], [], []
+
+    for i in range(n):
+        lbl_i = int(y[i].item())
+        pos_indices = [j for j in range(n) if j != i and int(y[j].item()) == lbl_i]
+        neg_indices = [k for k in range(n) if int(y[k].item()) != lbl_i]
+
+        for j in pos_indices:
+            anchors_p.append(X[i])
+            others_p.append(X[j])
+            pair_targets.append(1.0)
+
+        for k in neg_indices:
+            anchors_p.append(X[i])
+            others_p.append(X[k])
+            pair_targets.append(-1.0)
+
+        # Sample triplets (anchor, positive, negative)
+        for j in pos_indices[:6]:
+            for k in neg_indices[:8]:
+                anchors_t.append(X[i])
+                pos_t.append(X[j])
+                neg_t.append(X[k])
+
+    return (
+        torch.stack(anchors_p),
+        torch.stack(others_p),
+        torch.tensor(pair_targets, dtype=torch.float32),
+        torch.stack(anchors_t),
+        torch.stack(pos_t),
+        torch.stack(neg_t),
+    )
+
+
 class BiEncoderClassifier:
-    """Stage 1 Bi-Encoder (`all-MiniLM-L6-v2`) with Contrastive Metric Projection & Classifier Head."""
+    """Stage 1 Bi-Encoder (`all-MiniLM-L6-v2`) with PyTorch Contrastive Pair/Triplet Fine-Tuning & Centroid Cosine Classification."""
 
     _shared_encoder: Any = None
     _shared_model_name: str | None = None
@@ -176,10 +241,8 @@ class BiEncoderClassifier:
         self._encoder = self._get_encoder(self.settings.bi_encoder_model)
         self._raw_centroids: dict[str, np.ndarray] = {}
         self._projected_centroids: dict[str, np.ndarray] = {}
-        self._clf_head: Any = None
-        self._proj_W: np.ndarray | None = None
-        self._proj_b: np.ndarray | None = None
-        self._initialize_centroids_and_head()
+        self._proj_net: ContrastiveProjectionNet | None = None
+        self._initialize_centroids_and_projection()
 
     @classmethod
     def _get_encoder(cls, model_name: str) -> Any:
@@ -209,141 +272,90 @@ class BiEncoderClassifier:
         cands = [candidate_from_feature_string(t) for t in texts]
         return self.project_embeddings(raw, cands)
 
-    def _initialize_centroids_and_head(self) -> None:
-        # Compute raw seed centroids
+    def _initialize_centroids_and_projection(self) -> None:
         for label, examples in SEED_PROTOTYPES.items():
             embs = self.encode_raw(examples)
             centroid = _l2_normalize(np.mean(embs, axis=0, keepdims=True))[0]
             self._raw_centroids[label] = centroid.astype(np.float32)
 
-        # Load trained classifier head & contrastive projection weights if available
         if self.settings.classifier_model_path.exists():
             try:
-                payload = pickle.loads(self.settings.classifier_model_path.read_bytes())
-                self._clf_head = payload.get("clf_head")
-                self._proj_W = payload.get("proj_W")
-                self._proj_b = payload.get("proj_b")
-                if "projected_centroids" in payload:
-                    self._projected_centroids = payload["projected_centroids"]
+                ckpt = torch.load(self.settings.classifier_model_path, map_location="cpu", weights_only=False)
+                net = ContrastiveProjectionNet()
+                net.load_state_dict(ckpt["state_dict"])
+                net.eval()
+                self._proj_net = net
+                self._projected_centroids = {
+                    k: np.asarray(v, dtype=np.float32) for k, v in ckpt["projected_centroids"].items()
+                }
+                return
             except Exception as exc:
-                logger.warning("Failed to load classifier head (%s), rebuilding in-memory", exc)
+                logger.info("Training fresh ContrastiveProjectionNet (%s)", exc)
 
-        if not self._projected_centroids:
-            self._projected_centroids = dict(self._raw_centroids)
-
-    def _predict_class_probs(self, raw_embs: np.ndarray, candidates: list[DOMCandidate]) -> np.ndarray:
-        """Compute [N, 3] class probability distribution (`job_listing`, `pagination_or_filter`, `noise`)."""
-        n = len(candidates)
-        if n == 0:
-            return np.zeros((0, 3), dtype=np.float32)
-
-        centroid_matrix = np.stack([self._raw_centroids[lbl] for lbl in CLASS_LABELS], axis=0)  # [3, 384]
-        cos_sims = np.matmul(raw_embs, centroid_matrix.T)  # [N, 3]
-
-        # Temperature-scaled softmax over cosine similarities
-        scaled = cos_sims * 8.0
-        scaled -= np.max(scaled, axis=1, keepdims=True)
-        exp_scores = np.exp(scaled)
-        probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
-
-        struct_feats = np.stack([extract_structural_features_single(c) for c in candidates], axis=0)
-
-        if self._clf_head is not None:
-            full_feats = np.concatenate([raw_embs, struct_feats], axis=1)
-            head_probs = self._clf_head.predict_proba(full_feats)
-            probs = 0.55 * head_probs + 0.45 * probs
-
-        # Apply structural & URL guardrails so unmistakable noise/pagination/job signals are rock-solid
-        for i, cand in enumerate(candidates):
-            s = struct_feats[i]
-            is_job_url, is_page_url, is_noise_url = s[-3], s[-2], s[-1]
-            text_lower = f"{cand.text} {cand.context}".lower()
-
-            if is_noise_url > 0.5 or cand.region == "footer":
-                probs[i, 2] += 0.65
-            if any(
-                kw in text_lower
-                for kw in (
-                    "whatsapp channel",
-                    "join whatsapp",
-                    "telegram channel",
-                    "join telegram",
-                    "interview prep",
-                    "questions freshers get asked",
-                    "resume prompts",
-                    "privacy policy",
-                    "terms of service",
-                )
-            ):
-                probs[i, 2] += 0.75
-
-            if is_page_url > 0.5 and is_noise_url < 0.5:
-                probs[i, 1] += 0.60
-
-            if is_job_url > 0.5 and cand.region in ("article", "main") and is_noise_url < 0.5:
-                probs[i, 0] += 0.45
-
-        probs = np.clip(probs, 1e-6, None)
-        probs /= np.sum(probs, axis=1, keepdims=True)
-        return probs.astype(np.float32)
+        # If no saved checkpoint exists yet, train the Contrastive Pair/Triplet network on seed prototypes immediately
+        texts, labels = [], []
+        for lbl, exs in SEED_PROTOTYPES.items():
+            for ex in exs:
+                texts.append(ex)
+                labels.append(lbl)
+        self.fit_classifier_head(texts, labels)
 
     def project_embeddings(
         self,
         raw_embs: np.ndarray,
         candidates: list[DOMCandidate] | None = None,
     ) -> np.ndarray:
-        """Apply Contrastive Metric Projection to pull same-class embeddings toward their class centroid."""
+        """Pass `[raw_embs || struct_feats]` through the Contrastive Pair/Triplet-trained PyTorch network."""
         if len(raw_embs) == 0:
             return raw_embs
 
         if candidates is None:
             candidates = [DOMCandidate(url="/", url_path="/", text="", context="") for _ in range(len(raw_embs))]
 
-        probs = self._predict_class_probs(raw_embs, candidates)  # [N, 3]
-        centroid_matrix = np.stack([self._raw_centroids[lbl] for lbl in CLASS_LABELS], axis=0)  # [3, 384]
+        struct_feats = np.stack([extract_structural_features_single(c) for c in candidates], axis=0)
+        full_feats = np.concatenate([raw_embs, struct_feats], axis=1).astype(np.float32)
 
-        if self._proj_W is not None and self._proj_b is not None:
-            struct_feats = np.stack([extract_structural_features_single(c) for c in candidates], axis=0)
-            full_feats = np.concatenate([raw_embs, struct_feats], axis=1)
-            linear_proj = _l2_normalize(np.matmul(full_feats, self._proj_W) + self._proj_b)
-        else:
-            linear_proj = raw_embs
+        if self._proj_net is None:
+            return _l2_normalize(raw_embs)
 
-        # Contrastive attractor: blend the projected vector with its soft-assigned class centroid
-        class_attractor = np.matmul(probs, centroid_matrix)  # [N, 384]
-        projected = _l2_normalize(0.45 * linear_proj + 0.55 * class_attractor)
-        return projected.astype(np.float32)
+        self._proj_net.eval()
+        with torch.no_grad():
+            inp = torch.from_numpy(full_feats)
+            proj = self._proj_net(inp).cpu().numpy()
+        return _l2_normalize(proj).astype(np.float32)
 
     def get_raw_centroids(self) -> dict[str, np.ndarray]:
         """Return the unprojected 384-d class centroids."""
         return dict(self._raw_centroids)
 
     def get_centroids(self) -> dict[str, np.ndarray]:
-        """Return the Contrastive Metric Projected 384-d class centroids."""
-        out: dict[str, np.ndarray] = {}
-        for label, examples in SEED_PROTOTYPES.items():
-            cands = [candidate_from_feature_string(t, label=label) for t in examples]
-            raw = self.encode_raw(examples)
-            proj = self.project_embeddings(raw, cands)
-            out[label] = _l2_normalize(np.mean(proj, axis=0, keepdims=True))[0].astype(np.float32)
-        return out
+        """Return the Contrastive Pair/Triplet Projected 384-d class centroids."""
+        return dict(self._projected_centroids)
 
     def classify_candidates(
         self,
         candidates: list[DOMCandidate],
     ) -> tuple[list[DOMCandidate], np.ndarray]:
-        """Batch-encode and classify DOMCandidates into `job_listing`, `pagination_or_filter`, or `noise`."""
+        """Classify DOMCandidates purely by Nearest Centroid Cosine Similarity in the Contrastive Embedding Space."""
         if not candidates:
             return [], np.zeros((0, 384), dtype=np.float32)
 
         feature_strings = [c.to_feature_string() for c in candidates]
         raw_embs = self.encode_raw(feature_strings)
-        probs = self._predict_class_probs(raw_embs, candidates)
-        proj_embs = self.project_embeddings(raw_embs, candidates)
+        proj_embs = self.project_embeddings(raw_embs, candidates)  # [N, 384]
+
+        centroid_matrix = np.stack([self._projected_centroids[lbl] for lbl in CLASS_LABELS], axis=0)  # [3, 384]
+        cos_sims = np.matmul(proj_embs, centroid_matrix.T)  # [N, 3] cosine similarity in [-1, 1]
+
+        # Convert cosine similarities to calibrated confidence probabilities via temperature-scaled softmax
+        scaled = cos_sims * 10.0
+        scaled -= np.max(scaled, axis=1, keepdims=True)
+        exp_scores = np.exp(scaled)
+        probs = exp_scores / np.sum(exp_scores, axis=1, keepdims=True)
 
         classified: list[DOMCandidate] = []
         for idx, cand in enumerate(candidates):
-            best_idx = int(np.argmax(probs[idx]))
+            best_idx = int(np.argmax(cos_sims[idx]))
             label = CLASS_LABELS[best_idx]
             conf = float(probs[idx, best_idx])
             updated = cand.model_copy(
@@ -361,51 +373,88 @@ class BiEncoderClassifier:
         texts: list[str],
         labels: list[str],
         save_path: Path | None = None,
+        epochs: int = 80,
     ) -> dict[str, Any]:
-        """Train Contrastive Metric Projection (`395 -> 384`) + calibrated `LogisticRegression` head."""
-        from sklearn.linear_model import LogisticRegression, Ridge
-
+        """Train `ContrastiveProjectionNet` using PyTorch Contrastive Pair (`CosineEmbeddingLoss`) + Triplet (`TripletMarginWithDistanceLoss`) Loss."""
+        torch.manual_seed(42)
         cands = [candidate_from_feature_string(t, label=lbl) for t, lbl in zip(texts, labels)]
         raw_embs = self.encode_raw(texts)
         struct_feats = np.stack([extract_structural_features_single(c) for c in cands], axis=0)
-        X = np.concatenate([raw_embs, struct_feats], axis=1)  # [N, 395]
-        y = np.array([LABEL_TO_IDX[lbl] for lbl in labels], dtype=np.int64)
+        X_np = np.concatenate([raw_embs, struct_feats], axis=1).astype(np.float32)
+        y_np = np.array([LABEL_TO_IDX[lbl] for lbl in labels], dtype=np.int64)
 
-        # 1. Fit LogisticRegression classifier head
-        clf = LogisticRegression(C=2.0, max_iter=500, class_weight="balanced")
-        clf.fit(X, y)
+        X_t = torch.from_numpy(X_np)
+        y_t = torch.from_numpy(y_np)
 
-        # 2. Fit Contrastive Metric Projection matrix mapping [raw_emb || struct_feats] -> target class centroid
-        target_centroids = np.stack([self._raw_centroids[lbl] for lbl in labels], axis=0)  # [N, 384]
-        ridge = Ridge(alpha=1.0)
-        ridge.fit(X, target_centroids)
-        proj_W = ridge.coef_.T.astype(np.float32)  # [395, 384]
-        proj_b = ridge.intercept_.astype(np.float32)  # [384]
+        anc_p, oth_p, tgt_p, anc_tri, pos_tri, neg_tri = _build_contrastive_pairs_and_triplets(X_t, y_t)
 
-        self._clf_head = clf
-        self._proj_W = proj_W
-        self._proj_b = proj_b
-        self._projected_centroids = self.get_centroids()
+        net = ContrastiveProjectionNet(in_dim=X_np.shape[1], hidden_dim=256, out_dim=384)
+        net.train()
+        optimizer = torch.optim.AdamW(net.parameters(), lr=3e-3, weight_decay=1e-4)
+
+        cosine_pair_loss_fn = nn.CosineEmbeddingLoss(margin=0.15)
+        triplet_loss_fn = nn.TripletMarginWithDistanceLoss(
+            distance_function=lambda a, b: 1.0 - F.cosine_similarity(a, b),
+            margin=0.60,
+        )
+
+        for _ in range(epochs):
+            optimizer.zero_grad()
+            # 1. Contrastive Pair Loss (pulls positive pairs to cos=1.0, pushes negative pairs below margin=0.15)
+            z_a = net(anc_p)
+            z_b = net(oth_p)
+            loss_pair = cosine_pair_loss_fn(z_a, z_b, tgt_p)
+
+            # 2. Triplet Margin Loss on (anchor, positive, hard_negative)
+            zt_a = net(anc_tri)
+            zt_p = net(pos_tri)
+            zt_n = net(neg_tri)
+            loss_triplet = triplet_loss_fn(zt_a, zt_p, zt_n)
+
+            loss = loss_pair + loss_triplet
+            loss.backward()
+            optimizer.step()
+
+        net.eval()
+        self._proj_net = net
+
+        with torch.no_grad():
+            proj_all = net(X_t).cpu().numpy()
+
+        # Compute the 3 L2-normalized class centroids in the trained Contrastive Embedding Space
+        projected_centroids: dict[str, np.ndarray] = {}
+        for lbl_idx, lbl_name in enumerate(CLASS_LABELS):
+            mask = y_np == lbl_idx
+            cls_vecs = proj_all[mask]
+            centroid = _l2_normalize(np.mean(cls_vecs, axis=0, keepdims=True))[0].astype(np.float32)
+            projected_centroids[lbl_name] = centroid
+
+        self._projected_centroids = projected_centroids
+
+        # Evaluate nearest-centroid cosine accuracy
+        centroid_mat = np.stack([projected_centroids[lbl] for lbl in CLASS_LABELS], axis=0)
+        preds = np.argmax(np.matmul(proj_all, centroid_mat.T), axis=1)
+        train_acc = float(np.mean(preds == y_np))
 
         target_save = save_path or self.settings.classifier_model_path
         target_save.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "clf_head": clf,
-            "proj_W": proj_W,
-            "proj_b": proj_b,
-            "projected_centroids": self._projected_centroids,
-        }
-        target_save.write_bytes(pickle.dumps(payload))
+        torch.save(
+            {
+                "loss_type": "ContrastivePair+TripletMarginLoss",
+                "state_dict": net.state_dict(),
+                "projected_centroids": projected_centroids,
+            },
+            target_save,
+        )
 
-        centroid_arr = np.stack([self._projected_centroids[lbl] for lbl in CLASS_LABELS], axis=0)
         self.settings.centroids_path.parent.mkdir(parents=True, exist_ok=True)
-        np.save(self.settings.centroids_path, centroid_arr)
+        np.save(self.settings.centroids_path, centroid_mat)
 
-        train_acc = float(clf.score(X, y))
         return {
             "num_samples": len(texts),
+            "num_pairs": int(anc_p.shape[0]),
+            "num_triplets": int(anc_tri.shape[0]),
             "train_accuracy": round(train_acc, 4),
             "model_path": str(target_save),
             "centroids_path": str(self.settings.centroids_path),
         }
-

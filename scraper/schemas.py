@@ -96,3 +96,4 @@ class JobRecord(BaseModel):
         if not self.job_id:
             self.job_id = compute_job_id(self.company, self.title, self.apply_url or self.source_url)
         return self
+

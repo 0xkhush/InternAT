@@ -194,3 +194,4 @@ def extract_job_detail_from_html(
         outbound_apply_url=outbound_apply,
         relevance_score=relevance_score,
     )
+

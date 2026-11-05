@@ -133,3 +133,4 @@ class SeenJobsStore:
             "seen_job_ids": sorted(self.seen_job_ids),
         }
         self.path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
