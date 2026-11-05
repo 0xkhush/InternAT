@@ -11,7 +11,22 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from scraper.config import TARGET_PORTALS
 from scraper.schemas import JobRecord
 
-TRACKING_PARAM_PREFIXES = ("utm_", "fbclid", "gclid", "ref", "trk", "source", "mc_", "_ga", "igshid")
+TRACKING_PARAM_PREFIXES = (
+    "utm_",
+    "fbclid",
+    "gclid",
+    "ref",
+    "refid",
+    "trk",
+    "trackingid",
+    "pagenum",
+    "position",
+    "eponly",
+    "source",
+    "mc_",
+    "_ga",
+    "igshid",
+)
 
 
 def normalize_url(url: str) -> str:

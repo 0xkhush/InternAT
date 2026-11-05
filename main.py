@@ -16,8 +16,12 @@ async def run_interactive_cli(
     initial_query: str | None = None,
     skip_clarification: bool = False,
     top_k: int = 15,
+    reset_seen: bool = False,
 ) -> None:
     settings = Settings()
+    if reset_seen and settings.seen_jobs_path.exists():
+        settings.seen_jobs_path.unlink()
+        print("[SeenJobsStore] Cleared data/seen_jobs.json for a fresh crawl.")
     agent = IntakeAgent(settings)
 
     print("=" * 72)
@@ -51,14 +55,24 @@ async def run_interactive_cli(
     result = await pipeline.run(req, max_detail_pages=top_k)
 
     stats = result["removed_noise_stats"]
+    total_in_file = 0
+    if settings.output_jobs_path.exists():
+        try:
+            total_in_file = len(json.loads(settings.output_jobs_path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+
     print("\n" + "-" * 72)
     print(
         f"Noise Filter Stats: {stats['total_raw_candidates']} raw links -> "
-        f"{stats['job_candidates_found']} jobs kept | "
+        f"{stats['job_candidates_found']} unseen jobs kept | "
         f"{stats['pagination_links_found']} pagination/filters | "
         f"{stats['noise_dropped']} noise dropped"
     )
-    print(f"Saved {stats['final_clean_jobs_saved']} new deduplicated jobs to {settings.output_jobs_path}")
+    print(
+        f"Saved {stats['final_clean_jobs_saved']} NEW deduplicated jobs this run "
+        f"(Total jobs in {settings.output_jobs_path.name}: {total_in_file})"
+    )
     print("-" * 72)
 
     for idx, job in enumerate(result["job_listings"][:10], 1):
@@ -74,8 +88,16 @@ def main() -> None:
     parser.add_argument("--query", type=str, default=None, help="Initial job search query")
     parser.add_argument("--yes", action="store_true", help="Skip interactive clarification prompt")
     parser.add_argument("--top-k", type=int, default=15, help="Top-K job detail pages to keep after Cross-Encoder re-ranking (default: 15)")
+    parser.add_argument("--reset-seen", action="store_true", help="Clear data/seen_jobs.json before running")
     args = parser.parse_args()
-    asyncio.run(run_interactive_cli(initial_query=args.query, skip_clarification=args.yes, top_k=args.top_k))
+    asyncio.run(
+        run_interactive_cli(
+            initial_query=args.query,
+            skip_clarification=args.yes,
+            top_k=args.top_k,
+            reset_seen=args.reset_seen,
+        )
+    )
 
 
 if __name__ == "__main__":

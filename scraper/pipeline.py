@@ -35,7 +35,7 @@ class JobScraperPipeline:
     async def run(
         self,
         req: JobSearchRequirement,
-        max_listing_pages: int = 8,
+        max_listing_pages: int = 18,
         max_detail_pages: int = 15,
         enable_ddg: bool = True,
     ) -> dict[str, Any]:
@@ -83,11 +83,30 @@ class JobScraperPipeline:
                         total_noise_dropped += 1
 
             # Stage 2b: Cross-Encoder Re-Ranking
-            top_job_candidates = self.reranker.rerank(
-                all_job_candidates, req, top_k=max_detail_pages
-            )
             top_pagination = self.reranker.rerank(
                 all_pagination_candidates, req, top_k=10
+            )
+
+            # If fewer than max_detail_pages unseen job candidates were found on Page 1,
+            # follow the top 4 pagination/filter links (1-hop expansion) to discover deeper jobs!
+            if len(all_job_candidates) < max_detail_pages and top_pagination:
+                hop_urls = [(p.url, p.source_portal) for p in top_pagination[:4]]
+                hop_pages = await asyncio.gather(*[_fetch_and_extract(u, pid) for u, pid in hop_urls])
+                hop_flat = [c for page_list in hop_pages for c in page_list]
+                total_raw_candidates += len(hop_flat)
+                if hop_flat:
+                    hop_classified, _ = self.bi_encoder.classify_candidates(hop_flat)
+                    seen_cand_urls = {c.url for c in all_job_candidates}
+                    for c in hop_classified:
+                        if c.predicted_label == "job_listing":
+                            if not self.seen_store.is_url_seen(c.url) and c.url not in seen_cand_urls:
+                                all_job_candidates.append(c)
+                                seen_cand_urls.add(c.url)
+                        elif c.predicted_label == "noise":
+                            total_noise_dropped += 1
+
+            top_job_candidates = self.reranker.rerank(
+                all_job_candidates, req, top_k=max_detail_pages
             )
 
             # Stage 3: Fetch surviving Job Detail pages & run 4-Layer Data Cleaning
