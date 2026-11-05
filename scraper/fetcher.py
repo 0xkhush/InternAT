@@ -115,6 +115,62 @@ class HybridFetcher:
         if render_mode == "never":
             return await self._fetch_http(url)
 
+        # Fast-path for InternDoor (`interndoor.com`):
+        # 1. Its homepage loads 1,500+ live jobs via `/data/jobs.json` into `<ol id="joblist">` on the client.
+        # 2. Many jobs in `/data/jobs.json` have `pageSlug: null` and point directly to Workday/Avature URLs.
+        # We cache `/data/jobs.json` in memory so both the listing page and any direct ATS detail URLs from
+        # InternDoor resolve immediately with full structured job descriptions in <200ms!
+        if "interndoor.com" in url and "/jobs/" not in url:
+            try:
+                client = await self._get_http_client()
+                resp = await client.get("https://interndoor.com/data/jobs.json")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    jobs = data.get("jobs", [])
+                    self._interndoor_cache = {}
+                    cards_html: list[str] = []
+                    for j in jobs:
+                        emp_type = str(j.get("employmentType") or "")
+                        title = str(j.get("title") or "")
+                        if "intern" not in emp_type.lower() and "intern" not in title.lower():
+                            continue
+                        if not (j.get("category") == "software" or j.get("isTech")):
+                            continue
+                        company = str(j.get("company") or "")
+                        loc = str(j.get("location") or "India")
+                        slug = j.get("pageSlug")
+                        apply_link = str(j.get("applyUrl") or j.get("url") or "")
+                        href = f"https://interndoor.com/jobs/{slug}" if slug else apply_link
+                        if not href:
+                            continue
+                        exp = str(j.get("experience") or "")
+                        acad = str(j.get("academic") or "")
+                        stipend = str(j.get("stipend") or "")
+                        skills = ", ".join(j.get("skills") or [])
+                        summary = str(j.get("summary") or "")
+                        desc = str(j.get("description") or summary)
+                        self._interndoor_cache[href] = (
+                            f"<html><head><title>{title} at {company}</title></head>"
+                            f"<body><article><h1>{company} - {title}</h1>"
+                            f"<p>Location: {loc}</p><p>Experience: {exp}</p><p>Eligibility: {acad}</p>"
+                            f"<p>Stipend: {stipend}</p><p>Skills: {skills}</p>"
+                            f"<div>{desc}</div>"
+                            f'<a href="{apply_link}">Apply Now</a></article></body></html>'
+                        )
+                        cards_html.append(
+                            f'<article class="interndoor-card">'
+                            f'<h2><a href="{href}">{company} - {title}</a></h2>'
+                            f'<p>{company} | {loc} | Internship | {exp} | {acad} | {stipend} | {skills} | {summary}</p>'
+                            f'</article>'
+                        )
+                    if cards_html:
+                        return f"<html><body><main>{''.join(cards_html)}</main></body></html>"
+            except Exception as exc:
+                logger.debug("InternDoor JSON feed synthesis failed (%s), falling back to HTML", exc)
+
+        if hasattr(self, "_interndoor_cache") and url in self._interndoor_cache:
+            return self._interndoor_cache[url]
+
         if render_mode == "always":
             try:
                 return await self._fetch_playwright(url)

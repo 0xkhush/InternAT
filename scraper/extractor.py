@@ -36,7 +36,10 @@ def resolve_region(tag: Tag) -> RegionType:
     """Resolve the semantic DOM region of a tag walking outermost-to-innermost ancestors.
 
     - Outer chrome tags (`footer`, `header`, `aside`, `nav`) take precedence over anything nested inside them
-      (e.g., `<nav aria-label="Footer">` inside `<footer>` resolves to `"footer"`).
+      when they are outside `<main>`.
+    - Once inside `<main>` or `<article>`, a nested `<footer>` that contains job listing links (`/jobs/` or `/internships/`)
+      is treated as `"main"` content rather than site chrome (e.g., `interndoor.com` renders its SSR job directory
+      inside `<main><footer><details><ul><li><a href="/jobs/...">`).
     - Once an `<article>` card boundary is entered, inner `<header>` or `<footer>` sub-elements inside the card
       remain `"article"`.
     """
@@ -44,15 +47,21 @@ def resolve_region(tag: Tag) -> RegionType:
     if tag.name:
         ancestors.insert(0, tag.name.lower())
 
+    href_val = (tag.get("href") or "").lower() if tag.name == "a" else ""
+    is_job_href = any(p in href_val for p in ("/jobs/", "/job/", "/internships/", "/internship/", "job_details.php"))
+
     # Walk from outermost (root/body) to innermost (the tag itself)
     in_main = False
     for name in reversed(ancestors):
-        if name in ("footer", "header", "aside", "nav"):
-            return name  # type: ignore[return-value]
         if name == "article":
             return "article"
         if name == "main":
             in_main = True
+            continue
+        if name in ("footer", "header", "aside", "nav"):
+            if in_main and name == "footer" and is_job_href:
+                continue
+            return name  # type: ignore[return-value]
 
     return "main" if in_main else "body"
 

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from scraper.cleaner import clean_company_name, clean_text_block
 
 EXTERNAL_APPLY_TEXT_RE = re.compile(
-    r"\b(apply\s*now|apply\s*here|apply\s*online|apply\s*on\s*company|registration\s*link|application\s*link|click\s*here\s*to\s*apply)\b",
+    r"^\s*apply\s*$|(?:\b(?:apply\s*now|apply\s*here|apply\s*online|apply\s*on\s*company|registration\s*link|application\s*link|click\s*here\s*to\s*apply)\b)",
     re.IGNORECASE,
 )
 
