@@ -216,3 +216,4 @@ func SaveJobsJSON(path string, records []JobRecord) (int, error) {
 	}
 	return added, os.WriteFile(path, b, 0o644)
 }
+
